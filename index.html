@@ -1544,7 +1544,7 @@ async function toMessages(input, images, json) {
   if (images && images.length) {
     const last = msgs[msgs.length - 1];
     const parts = [{ type: 'text', text: last.content }];
-    for (const im of images.slice(0, 4)) parts.push({ type: 'image_url', image_url: typeof im === 'string' ? im : await blobToDataUrl(im) });
+    for (const im of images.slice(0, 4)) parts.push({ type: 'image_url', image_url: { url: typeof im === 'string' ? im : await blobToDataUrl(im) } });
     last.content = parts;
   }
   return msgs;
@@ -1569,7 +1569,7 @@ async function iaCall(input, opts, json) {
     // messages précis (quota du jour, IA pas configurée…) affichés tels quels ; les autres codes gardent le texte habituel du site
     throw err(['prompt_too_large', 'image_rejected', 'invalid_request', 'cancelled'].includes(e.code) ? e.code : 'own', msg);
   }
-  if (!stream) { const j = await r.json(); return { text: j.text || '', truncated: !!j.truncated }; }
+  if (!stream) { const j = await r.json(); return { text: j.text || '', truncated: !!j.truncated, model: j.model || '' }; }
   // flux « data: {...} » : on affiche au fur et à mesure
   const rd = r.body.getReader(); let buf = '', text = '', truncated = false;
   try {
@@ -1885,20 +1885,28 @@ const BENCH = [
       ['Voit le h3 sans h2 (ligne 10)', t => /h2/i.test(t) && /h3/i.test(t)],
       ['Voit le style dans le HTML (ligne 12)', t => /style/i.test(t)]
     ],
-    ref: "- ❌ **lang** (ligne 2) : `<html>` n'a pas d'attribut `lang`. Ajoute la langue de la page (ici le français).\n- ❌ **alt** (ligne 11) : l'image n'a pas de texte alternatif. Il sert aux lecteurs d'écran et s'affiche si l'image ne charge pas.\n- ❌ **ordre des titres** (ligne 10) : tu passes de `h1` à `h3` sans `h2`. Choisis le niveau selon la structure, pas selon la taille du texte.\n- ❌ **mise en forme dans le HTML** (ligne 12) : `style=\"color:red\"` doit aller dans `style.css`, avec une classe sur le paragraphe.\n\nCommence par le `lang` et le `alt` : ce sont les plus rapides à corriger." }
+    ref: "- ❌ **lang** (ligne 2) : `<html>` n'a pas d'attribut `lang`. Ajoute la langue de la page (ici le français).\n- ❌ **alt** (ligne 11) : l'image n'a pas de texte alternatif. Il sert aux lecteurs d'écran et s'affiche si l'image ne charge pas.\n- ❌ **ordre des titres** (ligne 10) : tu passes de `h1` à `h3` sans `h2`. Choisis le niveau selon la structure, pas selon la taille du texte.\n- ❌ **mise en forme dans le HTML** (ligne 12) : `style=\"color:red\"` doit aller dans `style.css`, avec une classe sur le paragraphe.\n\nCommence par le `lang` et le `alt` : ce sont les plus rapides à corriger." },
+  { id: 'tree', title: 'Arbre d\'expression (priorités et parcours)',
+    prompt: BENCH_RULES + "\n\n### Demande\nPour l'expression (a + b) * c - d / 2 : quelle est la racine de son arbre ? Décris les deux sous-arbres, puis donne le parcours préfixe et le parcours postfixe (éléments séparés par des espaces). C'est une correction autorisée : donne les réponses.",
+    checks: [
+      ['Racine = « - »', t => /racine[^.\n]{0,40}(«\s*-\s*»|`-`|\(-\)|moins|soustraction|\s-\s)/i.test(t)],
+      ['Préfixe juste : - * + a b c / d 2', t => /-\s*\*\s*\+\s*a\s*b\s*c\s*\/\s*d\s*2/.test(t)],
+      ['Postfixe juste : a b + c * d 2 / -', t => /a\s*b\s*\+\s*c\s*\*\s*d\s*2\s*\/\s*-/.test(t)]
+    ],
+    ref: "La **racine** est le `-` : c'est la dernière opération calculée, car `*` et `/` passent avant, et les parenthèses font calculer `a + b` en premier.\n\n- Sous-arbre gauche : `(a + b) * c`, avec `*` à sa racine ; à gauche le `+` (avec `a` et `b`), à droite `c`.\n- Sous-arbre droit : `d / 2`, avec `/` à sa racine, `d` à gauche et `2` à droite.\n\n**Préfixe** (racine, gauche, droite) : `- * + a b c / d 2`\n**Postfixe** (gauche, droite, racine) : `a b + c * d 2 / -`" },
 ];
 function benchTab(body) {
   const status = h('div', { class: 'w-status', role: 'status' });
   const usage = h('p', { class: 'w-lead' });
-  const run = h('button', { class: 'btn primary', type: 'button' }, 'Lancer le banc d\'essai (4 demandes)');
+  const run = h('button', { class: 'btn primary', type: 'button' }, 'Lancer le banc d\'essai (5 demandes)');
   const list = h('div', { class: 'w-bench' });
   W.iaUsage().then(u => { usage.textContent = 'Modèle : ' + (u.model || '?') + ' · ' + (u.used || 0) + ' / ' + (u.limit || '?') + ' demandes utilisées aujourd\'hui par ton compte.'; }).catch(() => { usage.textContent = 'La fonction « ia » ne répond pas : vérifie qu\'elle est déployée et que le secret IA_API_KEY est enregistré.'; });
   run.addEventListener('click', async () => {
     run.disabled = true; list.textContent = ''; let pass = 0, total = 0;
     for (const c of BENCH) {
       status.textContent = 'Cas « ' + c.title + ' »…';
-      const t0 = performance.now(); let text = '', j = null, error = null;
-      try { if (c.json) { j = await W.ia.json(c.prompt, { modelTier: 'default' }); text = JSON.stringify(j, null, 2); } else text = (await W.ia(c.prompt, { modelTier: 'default' })).text; }
+      const t0 = performance.now(); let text = '', j = null, error = null, model = '';
+      try { if (c.json) { j = await W.ia.json(c.prompt, { modelTier: 'default' }); text = JSON.stringify(j, null, 2); } else { const r = await W.ia(c.prompt, { modelTier: 'default' }); text = r.text; model = r.model; } }
       catch (e) { error = e.message || String(e); }
       const dt = ((performance.now() - t0) / 1000).toFixed(1);
       const res = c.checks.map(([label, f]) => { let ok = false; try { ok = !error && !!f(text, j); } catch (e) {} return [label, ok]; });
@@ -1907,15 +1915,15 @@ function benchTab(body) {
         h('h2', { class: 'w-h' }, c.title, h('span', { class: 'w-tag' }, res.filter(r => r[1]).length + '/' + res.length)),
         h('ul', { class: 'w-checks' }, res.map(([l, ok]) => h('li', { class: ok ? 'ok' : 'ko' }, (ok ? '✓ ' : '✗ ') + l))),
         h('div', { class: 'w-cmp' },
-          h('div', null, h('div', { class: 'w-ref', text: 'IA gratuite · ' + dt + ' s' }), h('pre', { class: 'w-ans', text: error ? 'Erreur : ' + error : text })),
+          h('div', null, h('div', { class: 'w-ref', text: (model || 'IA du site') + ' · ' + dt + ' s' }), h('pre', { class: 'w-ans', text: error ? 'Erreur : ' + error : text })),
           h('div', null, h('div', { class: 'w-ref', text: 'Claude (référence)' }), h('pre', { class: 'w-ans', text: c.ref })))));
     }
     status.textContent = 'Terminé : ' + pass + ' / ' + total + ' critères respectés. Lis aussi les réponses : les critères automatiques ne voient pas tout.';
     run.disabled = false;
     W.iaUsage().then(u => { usage.textContent = 'Modèle : ' + (u.model || '?') + ' · ' + (u.used || 0) + ' / ' + (u.limit || '?') + ' demandes utilisées aujourd\'hui par ton compte.'; }).catch(() => {});
   });
-  body.append(h('section', { class: 'w-sec' }, h('h2', { class: 'w-h' }, 'Tester l\'IA gratuite'),
-    h('p', { class: 'w-lead' }, 'Quatre demandes tirées de vrais exercices (indice, erreur, quiz, vérification web). Chaque réponse est notée sur des critères simples et affichée à côté de la réponse de Claude pour comparer.'),
+  body.append(h('section', { class: 'w-sec' }, h('h2', { class: 'w-h' }, 'Tester l\'IA du site'),
+    h('p', { class: 'w-lead' }, 'Cinq demandes tirées de vrais exercices (indice, erreur, quiz, vérification web, arbre). Chaque réponse est notée sur des critères simples et affichée à côté de la réponse de Claude pour comparer.'),
     usage, h('div', { class: 'w-row' }, run)), status, list);
 }
 
