@@ -710,10 +710,10 @@ const forgetAccount = () => { try { localStorage.removeItem(LAST_KEY); } catch (
 const initials = n => String(n || '?').trim().split(/[\s._-]+/).filter(Boolean).slice(0, 2).map(x => x[0].toUpperCase()).join('') || '?';
 
 /* vidéo de présentation : à côté du formulaire sur grand écran, sur demande sur téléphone */
-const PROMO = CFG.promoVideo === false ? null : { src: CFG.promoVideo || 'media/pub.mp4', poster: CFG.promoPoster || 'media/pub-poster.jpg' };
+const PROMO = CFG.promoVideo === false ? null : { src: CFG.promoVideo || 'media/pub.mp4?v=6', poster: CFG.promoPoster || 'media/pub-poster.jpg' };
 const wide = () => matchMedia('(min-width: 1000px)').matches;
 // MP4 (H.264) pour la plupart des navigateurs, WebM en secours
-const addSources = v => { v.append(h('source', { src: PROMO.src, type: 'video/mp4' }), h('source', { src: PROMO.src.replace(/\.mp4$/, '.webm'), type: 'video/webm' })); };
+const addSources = v => { v.append(h('source', { src: PROMO.src, type: 'video/mp4' }), h('source', { src: PROMO.src.replace(/\.mp4(\?|$)/, '.webm$1'), type: 'video/webm' })); };
 function promoPanel() {
   if (!PROMO || !wide()) return null;
   const v = h('video', { class: 'w-pv', muted: true, autoplay: true, loop: true, playsinline: true, preload: 'auto', poster: PROMO.poster, 'aria-label': 'Vidéo de présentation de l\'Atelier' });
@@ -723,12 +723,12 @@ function promoPanel() {
   snd.addEventListener('click', () => { v.muted = !v.muted; snd.textContent = v.muted ? '🔇' : '🔊'; snd.setAttribute('aria-label', v.muted ? 'Activer le son' : 'Couper le son'); if (v.paused) v.play().catch(() => {}); });
   v.lastElementChild.addEventListener('error', () => box.remove());
   if (matchMedia('(prefers-reduced-motion: reduce)').matches) { v.removeAttribute('autoplay'); v.controls = true; }
-  box.append(h('div', { class: 'w-pframe' }, v, snd), h('p', { class: 'w-pcap' }, h('b', null, 'L\'Atelier en 35 secondes'), ' · cours, C++, web, emploi du temps et tuteur IA au même endroit'));
+  box.append(h('div', { class: 'w-pframe' }, v, snd), h('p', { class: 'w-pcap' }, h('b', null, 'L\'Atelier en 43 secondes'), ' · cours, C++, SQL, web, emploi du temps et tuteur IA au même endroit'));
   return box;
 }
 function promoLink() {
   if (!PROMO || wide()) return null;
-  const a = h('button', { class: 'w-plink', type: 'button' }, '▶ Voir la présentation (35 s)');
+  const a = h('button', { class: 'w-plink', type: 'button' }, '▶ Voir la présentation (43 s)');
   a.addEventListener('click', () => {
     const v = h('video', { class: 'w-pv', controls: true, autoplay: true, playsinline: true, poster: PROMO.poster }); addSources(v);
     const ov = h('div', { class: 'w-ov w-pov', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Vidéo de présentation' });
