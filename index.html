@@ -1223,6 +1223,11 @@ html.w-out .app { visibility: hidden; }
 .w-h .w-tag { vertical-align: middle; }
 @media (max-width: 760px) { .w-cmp { grid-template-columns: 1fr; } }
 
+.w-help { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--copper); border-radius: 12px; padding: 12px 16px; margin: 0 0 18px; box-shadow: var(--shadow); }
+.w-help-t { font-size: 14px; }
+.w-help .w-row { margin-bottom: 0; }
+.w-help .w-status:empty { display: none; }
+
 </style>
 
 </head>
@@ -1472,8 +1477,8 @@ const DRIVE_TOOLS = {
   },
   async read_file_content(i) {
     const r = (await rows()).get(i.fileId); if (!r) throw err('tool_error', 'fichier introuvable');
-    if (r.content != null) return { content: r.content };
-    throw err('tool_error', 'lecture du texte indisponible pour ce type de fichier');
+    // PDF et autres : texte vide → le site extrait lui-même le texte avec pdf.js
+    return { content: r.content != null ? r.content : '' };
   },
   async create_file(i) {
     const parent = i.parentId === 'root' || !i.parentId ? ROOT_ID : i.parentId;
@@ -1615,6 +1620,40 @@ W.handoff = function (prompt) {
     h('p', { class: 'w-note' }, 'Pas encore de compte ? Crée-le gratuitement sur claude.ai. Rien n\'est envoyé tant que tu n\'appuies pas sur Envoyer dans Claude.')));
   document.body.append(ov);
   setTimeout(() => go.focus(), 30);
+};
+
+
+/* ---------- encadré « Aide de Claude » sur les dossiers de TD/TP (quand l'IA n'est pas intégrée) ---------- */
+const HELP_RULES = "Tu es le tuteur d'un étudiant de BUT Informatique 1re année (IUT). Réponds en français, tutoiement, mots simples. Ne donne PAS les réponses ni le code corrigé tout fait, sauf si je te le demande explicitement : guide-moi avec des questions et des indices, une étape à la fois. Le code se fait en C++ (cout, cin) sauf si le sujet dit autre chose.";
+W.helpBox = function (o) {
+  const status = h('div', { class: 'w-status', role: 'status' });
+  const make = async (btn, task, needAnswers) => {
+    btn.disabled = true; status.textContent = 'Préparation de la question (lecture du sujet)…';
+    try {
+      const ans = o.answers ? String(o.answers() || '').trim() : '';
+      if (needAnswers && !ans) { status.textContent = 'Écris d\'abord au moins une réponse, puis reviens ici.'; return; }
+      const docs = String(await o.docs() || '').trim();
+      const files = o.files ? String(o.files() || '').trim() : '';
+      let p = HELP_RULES + '\n\n### Dossier\n' + o.path + '\n\n';
+      p += docs ? '### Sujet et documents\n' + docs.slice(0, 30000) + '\n\n' : '### Sujet\n(le texte du sujet n\'a pas pu être lu : je te le décris si besoin)\n\n';
+      if (files) p += '### Mes fichiers\n' + files.slice(0, 12000) + '\n\n';
+      if (ans) p += '### Mes réponses\n' + ans.slice(0, 15000) + '\n\n';
+      p += '### Demande\n' + task;
+      status.textContent = '';
+      W.handoff(p);
+    } catch (e) { status.textContent = 'Impossible de préparer la question : ' + (e.message || e); }
+    finally { btn.disabled = false; }
+  };
+  const B = (label, task, primary, needAnswers) => { const b = h('button', { class: 'btn' + (primary ? ' primary' : ''), type: 'button' }, label); b.addEventListener('click', () => make(b, task, needAnswers)); return b; };
+  const btns = [
+    B('Comprendre le sujet ↗', 'Explique-moi en quelques lignes ce que demande ce sujet et liste les exercices. Puis demande-moi par lequel je veux commencer, et guide-moi pas à pas, sans me donner les réponses.', true),
+    o.answers ? B('Corriger mes réponses ↗', 'Corrige mes réponses exercice par exercice : ✅ juste / ⚠️ incomplet / ❌ faux, avec une explication simple. Pour ce qui est faux, donne-moi un indice pour corriger, pas la réponse toute faite.', false, true) : null,
+    B('Quiz ↗', 'Fais-moi réviser ce dossier : pose-moi 5 questions à choix multiples, UNE à la fois. Attends ma réponse, corrige-la en expliquant, puis passe à la suivante. À la fin, donne mon score et les notions à revoir.'),
+    B('Fiche de révision ↗', 'Rédige une fiche de révision d\'une page sur les notions de ce dossier : à retenir, syntaxe utile avec de petits exemples, méthode, pièges classiques. Pas les réponses des exercices.')
+  ];
+  return h('section', { class: 'w-help' },
+    h('div', { class: 'w-help-t' }, h('b', null, 'Aide de Claude'), h('span', { class: 'muted' }, ' · la question s\'ouvre dans ton compte Claude (gratuit), avec le sujet déjà dedans')),
+    h('div', { class: 'w-row' }, btns), status);
 };
 
 /* ---------- téléchargements ---------- */
@@ -4923,8 +4962,9 @@ function showFolder(n) {
     more.querySelector('button').setAttribute('aria-label', 'Autres actions');
     return [primary, revise, more];
   }
-  if (isWebCtx(n) && !FRIEND) w.append(webPanel(n));
+  if (isWebCtx(n) && (!FRIEND || window.__web)) w.append(webPanel(n));
   w.append(prepBanner); if (prepPanel) w.append(prepPanel);
+  if (window.__web && !window.__web.iaOn && pathOf(n).length >= 2 && !isWebCtx(n) && (n.kids.some(isSujet) || isRef)) w.append(window.__web.helpBox({ path: pathOf(n).map(x => x.name).join(' / '), docs: () => gatherDocs(n.id, 6), files: () => n.kids.filter(k => isCode(k) && k.content).slice(0, 6).map(k => '#### ' + k.name + '\n```\n' + k.content.slice(0, 4000) + '\n```').join('\n\n') }));
   // plusieurs sujets dans le même dossier : proposer un dossier par sujet
   const split = splitPlan(n);
   if (split) {
@@ -6997,6 +7037,7 @@ function showTd(f, focusIdx) {
   const fileNode = () => (nodes.get(f.id) || f).kids.find(k => !isFolder(k) && k.name === ansFileName(f));
 
   const w = el('div', { class: 'wrap wide' }); v.append(w);
+  if (window.__web && !window.__web.iaOn) setTimeout(() => { if (!w.isConnected || w.querySelector('.w-help')) return; const box = window.__web.helpBox({ path: pathOf(f).map(x => x.name).join(' / '), docs: () => gatherDocs(f.id, 6), answers: () => [...w.querySelectorAll('.td-ex')].map((c, i) => { const t = [...c.querySelectorAll('textarea')].map(x => x.value.trim()).filter(Boolean).join('\n'); if (!t) return ''; const hh = c.querySelector('h2, h3, h4, .td-n, b'); return '#### ' + (hh ? hh.textContent.trim().slice(0, 80) : 'Exercice ' + (i + 1)) + '\n' + t; }).filter(Boolean).join('\n\n') }); const hd = w.querySelector('.f-head'); if (hd) hd.after(box); else w.prepend(box); }, 0);
   const saveBtn = el('button', { class: 'btn', type: 'button', hidden: true, title: 'Enregistre tes réponses dans un fichier texte du dossier ' + f.name }, 'Enregistrer mes réponses en ligne');
   const sujetBtn = el('button', { class: 'btn td-sujet-btn', type: 'button' }, 'Voir le sujet');
   const meta = el('div', { class: 'f-meta' });
