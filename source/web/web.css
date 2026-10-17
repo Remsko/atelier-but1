@@ -77,3 +77,26 @@ html.w-out .app { visibility: hidden; }
 .w-help-t { font-size: 14px; }
 .w-help .w-row { margin-bottom: 0; }
 .w-help .w-status:empty { display: none; }
+
+/* écran de connexion : compte mémorisé + vidéo de présentation */
+.w-lwrap { display: flex; align-items: center; justify-content: center; gap: 40px; width: min(1320px, 100%); }
+.w-promo { flex: 1 1 auto; min-width: 0; max-width: 760px; }
+.w-pframe { position: relative; border-radius: 18px; overflow: hidden; border: 1px solid rgba(234,243,238,.14); box-shadow: 0 30px 80px -30px rgba(0,0,0,.7), 0 0 0 1px rgba(201,120,59,.25); background: #07130e; aspect-ratio: 16 / 9; }
+.w-pv { display: block; width: 100%; height: 100%; object-fit: cover; }
+.w-snd { position: absolute; right: 12px; bottom: 12px; border: 1px solid rgba(255,255,255,.25); background: rgba(7,19,14,.6); color: #fff; border-radius: 999px; width: 38px; height: 38px; font-size: 16px; backdrop-filter: blur(6px); }
+.w-snd:hover { background: rgba(7,19,14,.85); }
+.w-pcap { color: var(--silk-dim); font-size: 13.5px; margin: 12px 4px 0; line-height: 1.5; }
+.w-pcap b { color: var(--silk); }
+.w-lwrap .w-lcard { flex: 0 0 auto; }
+.w-who { display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel2); margin: 6px 0 4px; }
+.w-av { width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; background: var(--mask); color: var(--copper-hi); font-family: var(--f-disp); font-weight: 700; flex: none; }
+.w-sub { font-size: 12.5px; color: var(--muted); font-family: var(--f-mono); }
+.w-alt { text-align: center; margin-top: 10px; }
+.w-switch, .w-plink { border: 0; background: none; color: var(--muted); font-size: 13px; text-decoration: underline; text-underline-offset: 3px; padding: 4px; }
+.w-switch:hover, .w-plink:hover { color: var(--copper); }
+.w-plink { display: block; margin: 10px auto 0; }
+.w-pov { place-items: center; background: rgba(3,10,7,.85); }
+.w-pov .w-pframe { width: min(960px, 100%); }
+.w-pclose { margin: 14px auto 0; display: block; }
+.w-lcard > .w-go { width: 100%; justify-content: center; margin-top: 14px; }
+@media (max-width: 999px) { .w-promo { display: none; } }

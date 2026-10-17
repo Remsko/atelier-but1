@@ -1228,6 +1228,29 @@ html.w-out .app { visibility: hidden; }
 .w-help .w-row { margin-bottom: 0; }
 .w-help .w-status:empty { display: none; }
 
+/* écran de connexion : compte mémorisé + vidéo de présentation */
+.w-lwrap { display: flex; align-items: center; justify-content: center; gap: 40px; width: min(1320px, 100%); }
+.w-promo { flex: 1 1 auto; min-width: 0; max-width: 760px; }
+.w-pframe { position: relative; border-radius: 18px; overflow: hidden; border: 1px solid rgba(234,243,238,.14); box-shadow: 0 30px 80px -30px rgba(0,0,0,.7), 0 0 0 1px rgba(201,120,59,.25); background: #07130e; aspect-ratio: 16 / 9; }
+.w-pv { display: block; width: 100%; height: 100%; object-fit: cover; }
+.w-snd { position: absolute; right: 12px; bottom: 12px; border: 1px solid rgba(255,255,255,.25); background: rgba(7,19,14,.6); color: #fff; border-radius: 999px; width: 38px; height: 38px; font-size: 16px; backdrop-filter: blur(6px); }
+.w-snd:hover { background: rgba(7,19,14,.85); }
+.w-pcap { color: var(--silk-dim); font-size: 13.5px; margin: 12px 4px 0; line-height: 1.5; }
+.w-pcap b { color: var(--silk); }
+.w-lwrap .w-lcard { flex: 0 0 auto; }
+.w-who { display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel2); margin: 6px 0 4px; }
+.w-av { width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; background: var(--mask); color: var(--copper-hi); font-family: var(--f-disp); font-weight: 700; flex: none; }
+.w-sub { font-size: 12.5px; color: var(--muted); font-family: var(--f-mono); }
+.w-alt { text-align: center; margin-top: 10px; }
+.w-switch, .w-plink { border: 0; background: none; color: var(--muted); font-size: 13px; text-decoration: underline; text-underline-offset: 3px; padding: 4px; }
+.w-switch:hover, .w-plink:hover { color: var(--copper); }
+.w-plink { display: block; margin: 10px auto 0; }
+.w-pov { place-items: center; background: rgba(3,10,7,.85); }
+.w-pov .w-pframe { width: min(960px, 100%); }
+.w-pclose { margin: 14px auto 0; display: block; }
+.w-lcard > .w-go { width: 100%; justify-content: center; margin-top: 14px; }
+@media (max-width: 999px) { .w-promo { display: none; } }
+
 </style>
 
 </head>
@@ -2110,34 +2133,101 @@ document.addEventListener('click', e => {
 /* =====================================================================
    Connexion
    ===================================================================== */
-W.logout = async () => { try { await sb.auth.signOut(); } catch (e) {} location.hash = ''; location.reload(); };
-function loginScreen(msg) {
-  const ov = h('div', { class: 'w-login' });
-  const id = h('input', { class: 'w-input', id: 'w-id', autocomplete: 'username', autocapitalize: 'off', spellcheck: 'false', required: true });
-  const pw = h('input', { class: 'w-input', id: 'w-pw', type: 'password', autocomplete: 'current-password', required: true });
-  const show = h('button', { class: 'w-eye', type: 'button', 'aria-label': 'Afficher le mot de passe', onclick: () => { pw.type = pw.type === 'password' ? 'text' : 'password'; } }, '👁');
-  const go = h('button', { class: 'btn primary w-go', type: 'submit' }, 'Se connecter');
-  const status = h('div', { class: 'w-status', role: 'alert', text: msg || '' });
-  const form = h('form', { class: 'w-form', novalidate: true },
-    h('label', { for: 'w-id' }, 'Identifiant'), id,
-    h('label', { for: 'w-pw' }, 'Mot de passe'), h('div', { class: 'w-pwrow' }, pw, show), go, status);
-  form.addEventListener('submit', async e => {
-    e.preventDefault();
-    const raw = id.value.trim().toLowerCase(); if (!raw || !pw.value) { status.textContent = 'Remplis les deux champs.'; return; }
-    const email = emailOf(raw);
-    go.disabled = true; status.textContent = 'Connexion…';
-    const { error } = await sb.auth.signInWithPassword({ email, password: pw.value });
-    go.disabled = false;
-    if (error) { status.textContent = /invalid/i.test(error.message) ? 'Identifiant ou mot de passe incorrect.' : /fetch|network/i.test(error.message) ? 'Pas de connexion au serveur. Vérifie ton internet.' : error.message; pw.select(); return; }
-    ov.remove(); start();
+W.logout = async () => { try { await sb.auth.signOut(); } catch (e) {} try { sessionStorage.removeItem('atelier-but1-in'); } catch (e) {} location.hash = ''; location.reload(); };
+// dernier compte utilisé sur cet appareil (identifiant + nom affiché, jamais le mot de passe)
+const LAST_KEY = 'atelier-but1-last';
+const lastAccount = () => { try { return JSON.parse(localStorage.getItem(LAST_KEY)); } catch (e) { return null; } };
+const rememberAccount = p => { try { if (p && p.login) localStorage.setItem(LAST_KEY, JSON.stringify({ login: p.login, name: p.display_name || p.login })); } catch (e) {} };
+const forgetAccount = () => { try { localStorage.removeItem(LAST_KEY); } catch (e) {} };
+const initials = n => String(n || '?').trim().split(/[\s._-]+/).filter(Boolean).slice(0, 2).map(x => x[0].toUpperCase()).join('') || '?';
+
+/* vidéo de présentation : à côté du formulaire sur grand écran, sur demande sur téléphone */
+const PROMO = CFG.promoVideo === false ? null : { src: CFG.promoVideo || 'media/pub.mp4', poster: CFG.promoPoster || 'media/pub-poster.jpg' };
+const wide = () => matchMedia('(min-width: 1000px)').matches;
+// MP4 (H.264) pour la plupart des navigateurs, WebM en secours
+const addSources = v => { v.append(h('source', { src: PROMO.src, type: 'video/mp4' }), h('source', { src: PROMO.src.replace(/\.mp4$/, '.webm'), type: 'video/webm' })); };
+function promoPanel() {
+  if (!PROMO || !wide()) return null;
+  const v = h('video', { class: 'w-pv', muted: true, autoplay: true, loop: true, playsinline: true, preload: 'auto', poster: PROMO.poster, 'aria-label': 'Vidéo de présentation de l\'Atelier' });
+  v.muted = true; addSources(v);
+  const box = h('div', { class: 'w-promo' });
+  const snd = h('button', { class: 'w-snd', type: 'button', 'aria-label': 'Activer le son', title: 'Son' }, '🔇');
+  snd.addEventListener('click', () => { v.muted = !v.muted; snd.textContent = v.muted ? '🔇' : '🔊'; snd.setAttribute('aria-label', v.muted ? 'Activer le son' : 'Couper le son'); if (v.paused) v.play().catch(() => {}); });
+  v.lastElementChild.addEventListener('error', () => box.remove());
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) { v.removeAttribute('autoplay'); v.controls = true; }
+  box.append(h('div', { class: 'w-pframe' }, v, snd), h('p', { class: 'w-pcap' }, h('b', null, 'L\'Atelier en 35 secondes'), ' · cours, C++, web, emploi du temps et tuteur IA au même endroit'));
+  return box;
+}
+function promoLink() {
+  if (!PROMO || wide()) return null;
+  const a = h('button', { class: 'w-plink', type: 'button' }, '▶ Voir la présentation (35 s)');
+  a.addEventListener('click', () => {
+    const v = h('video', { class: 'w-pv', controls: true, autoplay: true, playsinline: true, poster: PROMO.poster }); addSources(v);
+    const ov = h('div', { class: 'w-ov w-pov', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Vidéo de présentation' });
+    const close = () => { v.pause(); ov.remove(); };
+    ov.addEventListener('click', e => { if (e.target === ov) close(); });
+    ov.append(h('div', { class: 'w-pframe' }, v), h('button', { class: 'btn w-pclose', type: 'button', onclick: close }, 'Fermer'));
+    document.body.append(ov);
   });
-  ov.append(h('div', { class: 'w-lcard' },
-    h('div', { class: 'w-brand' }, h('div', { class: 'w-ref', text: 'BUT Informatique · 1re année' }), h('div', { class: 'w-name', html: esc(CFG.siteName).replace(/BUT 1$/, '<span>BUT 1</span>') })),
-    h('p', { class: 'w-lead' }, 'Tes cours, ton code, ton emploi du temps. Connecte-toi pour retrouver ton espace depuis n\'importe quel appareil.'),
-    form,
-    h('p', { class: 'w-foot' }, 'Pas encore de compte ? Demande tes identifiants', CFG.adminContact ? h('span', null, ' à ', h('b', null, CFG.adminContact)) : ' à la personne qui t\'a envoyé ce lien', '.')));
+  return a;
+}
+
+/* écran de connexion : 3 cas
+   - déjà connecté sur cet appareil  → « Se connecter » en un clic (+ « Changer de compte »)
+   - compte connu mais déconnecté    → seulement le mot de passe (+ « Changer de compte »)
+   - inconnu                         → identifiant + mot de passe */
+function loginScreen(msg, mode) {
+  document.querySelectorAll('.w-login').forEach(x => x.remove());
+  const ov = h('div', { class: 'w-login' });
+  const last = lastAccount();
+  const known = mode === 'session' || (mode !== 'new' && last && last.login);
+  const status = h('div', { class: 'w-status', role: 'alert', text: msg || '' });
+  const card = h('div', { class: 'w-lcard' },
+    h('div', { class: 'w-brand' }, h('div', { class: 'w-ref', text: 'BUT Informatique · 1re année' }), h('div', { class: 'w-name', html: esc(CFG.siteName).replace(/BUT 1$/, '<span>BUT 1</span>') })));
+  const switchLink = h('button', { class: 'w-switch', type: 'button' }, 'Changer de compte');
+  switchLink.addEventListener('click', async () => {
+    switchLink.disabled = true;
+    if (mode === 'session') { try { await sb.auth.signOut(); } catch (e) {} }
+    forgetAccount(); try { sessionStorage.removeItem('atelier-but1-in'); } catch (e) {}
+    loginScreen('', 'new');
+  });
+  const who = (name, sub) => h('div', { class: 'w-who' }, h('span', { class: 'w-av', 'aria-hidden': 'true' }, initials(name)), h('div', null, h('b', null, name), h('div', { class: 'w-sub' }, sub)));
+
+  if (mode === 'session') {
+    const go = h('button', { class: 'btn primary w-go', type: 'button' }, 'Se connecter');
+    go.addEventListener('click', () => { try { sessionStorage.setItem('atelier-but1-in', '1'); } catch (e) {} ov.remove(); document.documentElement.classList.remove('w-out'); start(true); });
+    card.append(h('p', { class: 'w-lead' }, 'Bon retour ! Tu es déjà connecté sur cet appareil.'),
+      who(last && last.name || 'Ton compte', last && last.login ? 'identifiant ' + last.login : ''), go, h('div', { class: 'w-alt' }, switchLink), status);
+    setTimeout(() => go.focus(), 50);
+  } else {
+    const id = h('input', { class: 'w-input', id: 'w-id', autocomplete: 'username', autocapitalize: 'off', spellcheck: 'false', required: true });
+    const pw = h('input', { class: 'w-input', id: 'w-pw', type: 'password', autocomplete: 'current-password', required: true });
+    const show = h('button', { class: 'w-eye', type: 'button', 'aria-label': 'Afficher le mot de passe', onclick: () => { pw.type = pw.type === 'password' ? 'text' : 'password'; } }, '👁');
+    const go = h('button', { class: 'btn primary w-go', type: 'submit' }, 'Se connecter');
+    if (known) id.value = last.login;
+    const form = h('form', { class: 'w-form', novalidate: true },
+      known ? who(last.name, 'identifiant ' + last.login) : null,
+      known ? h('input', { type: 'hidden', autocomplete: 'username', value: last.login }) : null,
+      known ? null : h('label', { for: 'w-id' }, 'Identifiant'), known ? null : id,
+      h('label', { for: 'w-pw' }, 'Mot de passe'), h('div', { class: 'w-pwrow' }, pw, show), go, status);
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      const raw = id.value.trim().toLowerCase(); if (!raw || !pw.value) { status.textContent = known ? 'Entre ton mot de passe.' : 'Remplis les deux champs.'; return; }
+      go.disabled = true; status.textContent = 'Connexion…';
+      const { error } = await sb.auth.signInWithPassword({ email: emailOf(raw), password: pw.value });
+      go.disabled = false;
+      if (error) { status.textContent = /invalid/i.test(error.message) ? (known ? 'Mot de passe incorrect.' : 'Identifiant ou mot de passe incorrect.') : /fetch|network/i.test(error.message) ? 'Pas de connexion au serveur. Vérifie ton internet.' : error.message; pw.select(); return; }
+      try { sessionStorage.setItem('atelier-but1-in', '1'); } catch (x) {}
+      ov.remove(); start(true);
+    });
+    card.append(...[h('p', { class: 'w-lead' }, known ? 'Bon retour ! Entre ton mot de passe pour retrouver ton espace.' : 'Tes cours, ton code, ton emploi du temps. Connecte-toi pour retrouver ton espace depuis n\'importe quel appareil.'),
+      form, known ? h('div', { class: 'w-alt' }, switchLink) : null].filter(Boolean));
+    setTimeout(() => (known ? pw : id).focus(), 50);
+  }
+  card.append(...[h('p', { class: 'w-foot' }, 'Pas encore de compte ? Demande tes identifiants', CFG.adminContact ? h('span', null, ' à ', h('b', null, CFG.adminContact)) : ' à la personne qui t\'a envoyé ce lien', '.'), promoLink()].filter(Boolean));
+  const promo = promoPanel();
+  ov.append(h('div', { class: 'w-lwrap' + (promo ? ' w-with-promo' : '') }, promo, card));
   document.body.append(ov);
-  setTimeout(() => id.focus(), 50);
 }
 
 /* =====================================================================
@@ -2154,11 +2244,15 @@ function boot() {
   if (ref && W.profile) ref.textContent = (W.profile.display_name || W.profile.login || '') + (W.isAdmin ? ' · admin' : '');
   else if (ref && !ONLINE) ref.textContent = 'Mode local · ce navigateur';
 }
-async function start() {
+async function start(confirmed) {
   if (!ONLINE) { W.user = { id: 'local' }; W.ns = 'but1:local:'; boot(); return; }
   const { data } = await sb.auth.getSession();
   const s = data.session;
   if (!s) { document.documentElement.classList.add('w-out'); loginScreen(); return; }
+  // déjà connecté : à l'ouverture du site on propose « Se connecter » (ou « Changer de compte ») ;
+  // un simple rechargement dans le même onglet entre directement
+  let inTab = false; try { inTab = sessionStorage.getItem('atelier-but1-in') === '1'; } catch (e) {}
+  if (!confirmed && !inTab) { document.documentElement.classList.add('w-out'); loginScreen('', 'session'); return; }
   document.documentElement.classList.remove('w-out');
   W.user = s.user; W.ns = 'but1:' + s.user.id + ':';
   // profil : en ligne si possible, sinon la dernière copie (hors connexion)
@@ -2168,6 +2262,7 @@ async function start() {
     if (error) throw error; W.profile = p; try { localStorage.setItem(key, JSON.stringify(p)); } catch (e) {}
   } catch (e) { try { W.profile = JSON.parse(localStorage.getItem(key)) || { login: s.user.email.split('@')[0] }; } catch (x) { W.profile = { login: '' }; } }
   W.isAdmin = !!W.profile.is_admin;
+  rememberAccount(W.profile);
   boot();
 }
 function init() {
