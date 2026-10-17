@@ -13,7 +13,7 @@ window.ATELIER_CONFIG = {
   loginPattern: '{login}@atelier-but1.invalid',
   // true une fois la fonction « ia » déployée et le secret IA_API_KEY enregistré (voir LISEZMOI, partie 4).
   // false : le tuteur prépare la question et l'ouvre dans Claude (compte gratuit de chacun).
-  ia: false,
+  ia: true,
   siteName: 'Atelier BUT 1',
   adminContact: 'Remsko'                        // ex. 'Rémi (Discord : remi)' : affiché sur l'écran de connexion
 };
