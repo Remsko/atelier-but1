@@ -589,6 +589,7 @@ main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .sae-prog b { text-align: right; font-family: var(--f-mono); font-size: 13px; }
 .sae-team, .sae-bareme { padding: 14px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 14px; display: grid; gap: 6px; }
 .sae-team-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.sol-c5 { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--line); }
 .sae-field { display: grid; gap: 4px; font-size: 14px; margin-top: 4px; }
 .sae-field > span { font-weight: 600; }
 .sae-projet .sae-paste { width: 100%; margin: 0; font-family: inherit; font-size: 14px; resize: vertical; }
@@ -3787,8 +3788,16 @@ function showTd(f, focusIdx) {
       const main = res.find(r => r.cols); if (!main) { proofOut.innerHTML = '<p class="err">Corrige d\'abord l\'erreur de ta requête.</p>'; return; }
       btn.disabled = true; proofOut.innerHTML = '<span class="thinking"><i></i><i></i><i></i>Claude choisit la requête de preuve…</span>';
       try {
+        st.proof[k] = await c5Text(smp, sqlTa.value.trim(), main, t => { proofOut.innerHTML = '<span class="thinking"><i></i><i></i><i></i>' + t + '</span>'; });
+        st.dirty = true; save(); updMeta(); paintProof();
+      } catch (er) { proofOut.innerHTML = '<p class="err">' + escH(sampleErrText(er)) + '</p>'; }
+      btn.disabled = false;
+    }
+    // réponse au format C5 (requête + résultat + explications + preuve annotée) pour une requête donnée
+    async function c5Text(smp, query, main, step) {
+      {
         const env = await getEnv();
-        const ctxS = '### Énoncé (question ' + k + ')\n' + e.title + '\n' + (e.statement || '') + '\n\n### Requête de l\'étudiant\n' + sqlTa.value.trim() + '\n\n### Résultat obtenu\n' + SQLKIT.ascii(main) + '\n\n### Tables\n' + sqlTablesText(env, 7000);
+        const ctxS = '### Énoncé (question ' + k + ')\n' + e.title + '\n' + (e.statement || '') + '\n\n### Requête de l\'étudiant\n' + query + '\n\n### Résultat obtenu\n' + SQLKIT.ascii(main) + '\n\n### Tables\n' + sqlTablesText(env, 7000);
         const p1 = 'Tu aides un étudiant de BUT 1 à rédiger la PREUVE d\'une requête SQL pour son TD (MySQL, plateforme C5). ' + SQL_CONV + '\n' +
           'Méthode de la prof : tri → partir du SELECT * avec le même ORDER BY pour expliquer les niveaux de tri ; jointure → SELECT * de la jointure ; opération ensembliste → une requête par ensemble (les 2 sous-requêtes) ; fonction de groupe → partir de la table entière ; regroupement → SELECT * avec un ORDER BY sur le champ de regroupement. Restriction simple → SELECT * de la table (ou de la jointure) sans le WHERE, pour montrer les lignes gardées et écartées.\n' +
           'Choisis la ou les requêtes de preuve (1, ou 2 pour une opération ensembliste), avec les mêmes conventions d\'écriture. Réponds uniquement en JSON : {"preuves":["SELECT …;"]}\n\n' + ctxS;
@@ -3797,7 +3806,7 @@ function showTd(f, focusIdx) {
         if (!proofs.length) throw { code: 'own', message: 'Claude n\'a pas proposé de requête de preuve. Réessaie.' };
         const pres = proofs.map(q => ({ q: q.trim(), r: env.run(q).results.find(x => x.cols || x.error) }));
         const bad = pres.find(x => !x.r || x.r.error); if (bad) throw { code: 'own', message: 'La requête de preuve proposée ne marche pas ici (' + (bad.r ? bad.r.error : '?') + '). Réessaie.' };
-        proofOut.innerHTML = '<span class="thinking"><i></i><i></i><i></i>Claude rédige les explications…</span>';
+        step('Claude rédige les explications…');
         const p2 = 'Rédige la réponse de l\'étudiant pour son fichier à rendre, au format de sa prof, à partir des VRAIS résultats ci-dessous (n\'invente aucune valeur). Français, phrases très courtes, sans blabla.\n' +
           'Réponds uniquement en JSON :\n{"sections":[{"titre":"PROJECTION","texte":"…"}], "preuves":[{"lignes":{"1":"raison courte"}, "colonnes":{"nom_de_colonne":["projection","tri 1 : …"]}, "pied":"sélection : …"}]}\n' +
           '- "sections" : seulement celles que la requête utilise vraiment, dans cet ordre : PROJECTION, JOINTURE, SÉLECTION, TRI, OPÉRATION ENSEMBLISTE, FONCTION DE GROUPE, REGROUPEMENT. Pour TRI : chaque niveau, quand et pourquoi il départage (avec des exemples réels). Pour SÉLECTION : le critère, et « aucun critère » s\'il n\'y en a pas.\n' +
@@ -3805,13 +3814,12 @@ function showTd(f, focusIdx) {
           'Exemple de ton attendu (question 1, validée par l\'étudiant) : PROJECTION « nomequipe vient de equipe, salaire et nomcoureur viennent de coureur. Jointure nécessaire : coureur ne contient que numequipe, pas le nom de l\'équipe. » ; SÉLECTION « aucun critère → les 9 coureurs sont tous affichés » ; TRI « Niveau 1, nomequipe ↑ : AG2R → Astana → Festina → Rabobank. Niveau 2, salaire ↑ : il départage les coureurs d\'une même équipe… ».\n\n' +
           ctxS + '\n\n' + pres.map((x, i) => '### Requête de preuve ' + (i + 1) + '\n' + x.q + '\n' + SQLKIT.ascii(x.r)).join('\n\n');
         const j2 = await smp.json(p2, { modelTier: 'default', cache: false });
-        let txt = k + ') ' + sqlTa.value.trim() + '\n\n' + SQLKIT.ascii(main) + '\n\n';
+        let txt = k + ') ' + query + '\n\n' + SQLKIT.ascii(main) + '\n\n';
         for (const sc of (j2 && Array.isArray(j2.sections) ? j2.sections : [])) if (sc && sc.titre && sc.texte) txt += String(sc.titre).toUpperCase() + ' :\n' + String(sc.texte).trim() + '\n\n';
         txt += 'PREUVE' + (pres.length > 1 ? 'S' : '') + ' :\n';
         pres.forEach((x, i) => { const an = (j2 && j2.preuves && j2.preuves[i]) || {}; txt += x.q.replace(/;?\s*$/, ';') + '\n\n' + SQLKIT.annotate(SQLKIT.ascii(x.r), an.lignes || {}, an.colonnes || {}, an.pied || '') + '\n\n'; });
-        st.proof[k] = txt.trim(); st.dirty = true; save(); updMeta(); paintProof();
-      } catch (er) { proofOut.innerHTML = '<p class="err">' + escH(sampleErrText(er)) + '</p>'; }
-      btn.disabled = false;
+        return txt.trim();
+      }
     }
     const chip = el('span', { class: 'verdict', hidden: true });
     const corrBtn = el('button', { class: 'btn primary sm', type: 'button' }, 'Corriger');
@@ -3826,9 +3834,43 @@ function showTd(f, focusIdx) {
       if (c) { fb.innerHTML = md(c.text, { plain: true }); chip.hidden = !c.verdict; chip.textContent = c.verdict || ''; chip.className = 'verdict ' + (VERDICTS[c.verdict] || ''); corrBtn.textContent = 'Corriger à nouveau'; }
       else { fb.textContent = ''; chip.hidden = true; corrBtn.textContent = 'Corriger'; }
       sol.innerHTML = st.sol[k] ? '<div class="who">Correction</div>' + md(st.sol[k], { plain: true }) : '';
+      if (sqlMode && st.sol[k]) sol.append(solC5Box());
       sol.hidden = !!st.sol[k] && !solShown;
       solBtn.textContent = st.sol[k] ? (solShown ? 'Masquer la correction' : 'Voir la correction') : 'Voir la correction';
       stale();
+    }
+    // « Correction au format C5 » : la requête de la correction, exécutée sur les tables, rédigée comme « Rédiger la réponse C5 »
+    function solC5Box() {
+      st.solc5 = st.solc5 || {};
+      const box = el('div', { class: 'sol-c5' });
+      const out = el('div');
+      const show = () => {
+        out.textContent = '';
+        if (!st.solc5[k]) return;
+        const copy = el('button', { class: 'btn sm', type: 'button' }, 'Copier');
+        copy.addEventListener('click', async () => { try { await navigator.clipboard.writeText(st.solc5[k]); toast('Correction C5 copiée'); } catch (x) { toast('Copie impossible ici'); } });
+        out.append(el('div', { class: 'who', text: 'Correction au format C5' }), el('pre', { class: 'proof-pre', text: st.solc5[k] }),
+          el('div', { class: 'td-bar' }, copy, el('span', { class: 'muted small', text: 'Résultats calculés sur les tables du TD : vérifie-les sur C5.' })));
+      };
+      const b = el('button', { class: 'btn sm', type: 'button', title: 'La requête de la correction, avec son résultat et la preuve annotée, au format du fichier à rendre' }, st.solc5[k] ? 'Refaire au format C5' : 'Correction au format C5');
+      b.addEventListener('click', async () => {
+        const smp = await getSample(); if (!smp) { out.innerHTML = '<p class="err">Il faut ouvrir le site depuis claude.ai.</p>'; return; }
+        const m = /```sql\s*\n([\s\S]*?)```/i.exec(st.sol[k] || '');
+        const q = m ? m[1].trim() : '';
+        if (!q) { out.innerHTML = '<p class="err">La correction ne contient pas de requête SQL : clique sur « Masquer la correction » puis « Voir la correction » pour la refaire.</p>'; return; }
+        b.disabled = true; out.innerHTML = '<span class="thinking"><i></i><i></i><i></i>Exécution de la requête de la correction…</span>';
+        try {
+          const env = await getEnv();
+          if (!env.info.length) throw { code: 'own', message: 'Aucune table trouvée pour ce TD : ajoute le contenu des tables (voir « Base de données » en haut).' };
+          const main = env.run(q).results.find(r => r.cols || r.error);
+          if (!main || main.error) throw { code: 'own', message: 'La requête de la correction ne s\'exécute pas ici' + (main && main.error ? ' (' + main.error + ')' : '') + '.' };
+          st.solc5[k] = await c5Text(smp, q, main, t => { out.innerHTML = '<span class="thinking"><i></i><i></i><i></i>' + t + '</span>'; });
+          save(); show(); b.textContent = 'Refaire au format C5';
+        } catch (er) { out.innerHTML = '<p class="err">' + escH(sampleErrText(er)) + '</p>'; }
+        b.disabled = false;
+      });
+      box.append(el('div', { class: 'td-bar' }, b), out); show();
+      return box;
     }
     async function ctx() {
       const sujet = await gatherDocs(f.id, 3);
