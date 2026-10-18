@@ -95,7 +95,7 @@ html.w-out .app { visibility: hidden; }
 .w-switch, .w-plink { border: 0; background: none; color: var(--muted); font-size: 13px; text-decoration: underline; text-underline-offset: 3px; padding: 4px; }
 .w-switch:hover, .w-plink:hover { color: var(--copper); }
 .w-plink { display: block; margin: 10px auto 0; }
-.w-pov { place-items: center; background: rgba(3,10,7,.85); }
+.w-pov { place-items: center; background: rgba(3,10,7,.85); z-index: 1100; } /* au-dessus de l'écran de connexion (1000) */
 .w-pov .w-pframe { width: min(960px, 100%); }
 .w-pclose { margin: 14px auto 0; display: block; }
 .w-lcard > .w-go { width: 100%; justify-content: center; margin-top: 14px; }

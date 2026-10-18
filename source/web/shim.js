@@ -792,7 +792,9 @@ function promoLink() {
   a.addEventListener('click', () => {
     const v = h('video', { class: 'w-pv', controls: true, autoplay: true, playsinline: true, poster: PROMO.poster }); addSources(v);
     const ov = h('div', { class: 'w-ov w-pov', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Vidéo de présentation' });
-    const close = () => { v.pause(); ov.remove(); };
+    const close = () => { v.pause(); ov.remove(); document.removeEventListener('keydown', esc); };
+    const esc = e => { if (e.key === 'Escape') close(); };
+    document.addEventListener('keydown', esc);
     ov.addEventListener('click', e => { if (e.target === ov) close(); });
     ov.append(h('div', { class: 'w-pframe' }, v), h('button', { class: 'btn w-pclose', type: 'button', onclick: close }, 'Fermer'));
     document.body.append(ov);
@@ -862,8 +864,10 @@ function loginScreen(msg, mode) {
    Démarrage
    ===================================================================== */
 let booted = false;
+const stopPromo = () => document.querySelectorAll('.w-pov, .w-promo').forEach(x => { x.querySelectorAll('video').forEach(v => v.pause()); if (x.classList.contains('w-pov')) x.remove(); });
 function boot() {
   if (booted) return; booted = true;
+  stopPromo();
   const src = document.getElementById('atelier-main');
   const s = document.createElement('script'); s.textContent = src.textContent; document.body.append(s);
   document.documentElement.classList.add('w-ready');
