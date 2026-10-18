@@ -658,7 +658,7 @@ function driveSyncSection(refreshStats) {
   const status = h('div', { class: 'w-status', role: 'status' });
   const when = d => d ? new Date(d).toLocaleString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'jamais';
   const sum = r => !r ? '' : r.error ? 'Erreur : ' + r.error
-    : [r.added && r.added + ' ajouté(s)', r.updated && r.updated + ' mis à jour', r.removed && r.removed + ' retiré(s)', (r.unchanged || 0) + ' déjà à jour'].filter(Boolean).join(', ')
+    : [r.added && r.added + ' ajouté(s)', r.updated && r.updated + ' mis à jour', r.removed && r.removed + ' retiré(s)', (r.unchanged || 0) + ' déjà à jour', r.mine && r.mine + ' dans ton espace seulement'].filter(Boolean).join(', ')
       + (r.partial ? ' (pas fini : la suite au prochain passage)' : '') + (r.errors && r.errors.length ? '. Problèmes : ' + r.errors.slice(0, 3).join(' ; ') : '');
   const draw = s => {
     sec.textContent = '';
@@ -668,7 +668,7 @@ function driveSyncSection(refreshStats) {
       sec.append(h('p', { class: 'w-lead' }, s.robotBad ? 'La clé du robot enregistrée dans Supabase n\'est pas valide : recolle tout le contenu du fichier .json dans le secret GDRIVE_SA_JSON.'
         : 'Pas encore activée : il manque le compte robot Google (secret GDRIVE_SA_JSON dans Supabase). Une fois en place, les cours de ton Drive arrivent ici tout seuls, chaque heure.'));
     } else {
-      sec.append(h('p', { class: 'w-lead' }, 'Le site copie ton dossier ', h('b', null, s.folderName || 'Drive'), ' toutes les heures : seulement les fichiers nouveaux ou modifiés, avec le même tri que l\'import (pas de code ni de corrections). Les Google Docs arrivent en PDF.'),
+      sec.append(h('p', { class: 'w-lead' }, 'Le site copie ton dossier ', h('b', null, s.folderName || 'Drive'), ' toutes les heures (seulement les fichiers nouveaux ou modifiés ; les Google Docs arrivent en PDF). Les sujets et les cours vont dans la bibliothèque commune ; tes réponses, ton code et les corrigés arrivent seulement dans ton espace : les autres comptes ne les voient pas.'),
         h('p', { class: 'w-note' }, 'Le dossier doit être partagé (lecteur) avec le robot : ', h('code', null, s.robot)),
         h('p', { class: 'w-note' }, 'Dernier passage : ' + when(s.lastRun) + (s.last ? ' · ' + sum(s.last) : '')));
     }

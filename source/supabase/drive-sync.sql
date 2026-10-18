@@ -26,6 +26,11 @@ create table if not exists public.drive_map (
   kind           text not null default 'file'
 );
 
+-- fichiers privés (réponses, code, corrigés…) : copiés seulement dans l'espace de ce compte (le premier admin)
+alter table public.drive_map  add column if not exists owner uuid;
+alter table public.sync_state add column if not exists private_owner uuid;
+update public.sync_state set private_owner = (select id from public.profiles where is_admin order by created_at limit 1) where id = 1 and private_owner is null;
+
 alter table public.sync_state enable row level security;
 alter table public.drive_map  enable row level security;
 revoke all on public.sync_state from anon, authenticated;
