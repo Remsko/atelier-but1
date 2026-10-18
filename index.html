@@ -2075,6 +2075,66 @@ function coursTab(body) {
     stats, h('label', { class: 'w-check', for: 'w-skip' }, skip, ' Seulement les sujets et les cours (PDF, documents, images, tables SQL) : pas ton code, tes réponses, tes corrections ni tes brouillons (recommandé)'),
     h('div', { class: 'w-row' }, zb, db, zip, dir)), status);
   refresh();
+  if (ONLINE) body.prepend(driveSyncSection(refresh));
+}
+
+/* ---------- synchro automatique avec Google Drive (fonction drive-sync) ---------- */
+async function syncCall(body) {
+  const { data, error } = await sb.functions.invoke('drive-sync', { body });
+  if (error) { let m = error.message; try { const j = await error.context.json(); m = j.error || m; } catch (e) { /* */ } throw new Error(m); }
+  if (data && data.error) throw new Error(data.error);
+  return data;
+}
+function driveSyncSection(refreshStats) {
+  const sec = h('section', { class: 'w-sec' });
+  const status = h('div', { class: 'w-status', role: 'status' });
+  const when = d => d ? new Date(d).toLocaleString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'jamais';
+  const sum = r => !r ? '' : r.error ? 'Erreur : ' + r.error
+    : [r.added && r.added + ' ajouté(s)', r.updated && r.updated + ' mis à jour', r.removed && r.removed + ' retiré(s)', (r.unchanged || 0) + ' déjà à jour'].filter(Boolean).join(', ')
+      + (r.partial ? ' (pas fini : la suite au prochain passage)' : '') + (r.errors && r.errors.length ? '. Problèmes : ' + r.errors.slice(0, 3).join(' ; ') : '');
+  const draw = s => {
+    sec.textContent = '';
+    const ok = s.robot && s.lastOk && !(s.last && s.last.error);
+    sec.append(h('h2', { class: 'w-h' }, 'Synchro automatique avec Google Drive'));
+    if (!s.robot) {
+      sec.append(h('p', { class: 'w-lead' }, s.robotBad ? 'La clé du robot enregistrée dans Supabase n\'est pas valide : recolle tout le contenu du fichier .json dans le secret GDRIVE_SA_JSON.'
+        : 'Pas encore activée : il manque le compte robot Google (secret GDRIVE_SA_JSON dans Supabase). Une fois en place, les cours de ton Drive arrivent ici tout seuls, chaque heure.'));
+    } else {
+      sec.append(h('p', { class: 'w-lead' }, 'Le site copie ton dossier ', h('b', null, s.folderName || 'Drive'), ' toutes les heures : seulement les fichiers nouveaux ou modifiés, avec le même tri que l\'import (pas de code ni de corrections). Les Google Docs arrivent en PDF.'),
+        h('p', { class: 'w-note' }, 'Le dossier doit être partagé (lecteur) avec le robot : ', h('code', null, s.robot)),
+        h('p', { class: 'w-note' }, 'Dernier passage : ' + when(s.lastRun) + (s.last ? ' · ' + sum(s.last) : '')));
+    }
+    const run = h('button', { class: 'btn primary', type: 'button', disabled: !s.robot }, 'Synchroniser maintenant');
+    run.addEventListener('click', async () => {
+      run.disabled = true; let total = { added: 0, updated: 0, removed: 0 };
+      try {
+        for (let i = 1; i <= 8; i++) {
+          status.textContent = i === 1 ? 'Lecture du Drive…' : 'On continue (' + i + ')…';
+          const r = await syncCall({ action: 'run' });
+          total.added += r.added; total.updated += r.updated; total.removed += r.removed;
+          if (!r.partial || (r.errors && r.errors.length && !r.added && !r.updated)) { status.textContent = 'C\'est fait : ' + sum(Object.assign({}, r, total)); break; }
+        }
+        cache = null; if (W.resync) W.resync(); refreshStats();
+      } catch (e) { status.textContent = 'Échec : ' + e.message; }
+      run.disabled = false; load(true);
+    });
+    const auto = h('input', { type: 'checkbox', id: 'w-auto', checked: !!s.auto });
+    auto.addEventListener('change', async () => { try { await syncCall({ action: 'auto', on: auto.checked }); status.textContent = auto.checked ? 'Synchro automatique activée.' : 'Synchro automatique en pause.'; } catch (e) { status.textContent = 'Échec : ' + e.message; } });
+    const link = h('input', { class: 'w-input', type: 'url', placeholder: 'Lien du dossier Google Drive (https://drive.google.com/drive/folders/…)' });
+    const setDir = h('button', { class: 'btn', type: 'button' }, 'Changer de dossier');
+    setDir.addEventListener('click', async () => { try { await syncCall({ action: 'folder', folder: link.value }); link.value = ''; status.textContent = 'Dossier enregistré. Clique sur « Synchroniser maintenant ».'; load(true); } catch (e) { status.textContent = 'Échec : ' + e.message; } });
+    sec.append(h('div', { class: 'w-row' }, run), h('label', { class: 'w-check', for: 'w-auto' }, auto, ' Synchroniser automatiquement toutes les heures'));
+    if (ok && s.orphans) {
+      const tidy = h('button', { class: 'btn', type: 'button' }, 'Ranger');
+      tidy.addEventListener('click', async () => { tidy.disabled = true; try { const r = await syncCall({ action: 'cleanup' }); status.textContent = r.removed + ' ancien(s) fichier(s) retiré(s).'; cache = null; if (W.resync) W.resync(); refreshStats(); load(true); } catch (e) { status.textContent = 'Échec : ' + e.message; tidy.disabled = false; } });
+      sec.append(h('p', { class: 'w-note' }, s.orphans + ' fichier(s) de la bibliothèque ne sont pas dans ton Drive (anciens imports à la main, par exemple ' + s.orphanNames.slice(0, 3).join(', ') + '). '), h('div', { class: 'w-row' }, tidy));
+    }
+    sec.append(h('details', { class: 'w-note' }, h('summary', null, 'Changer de dossier Drive'), h('div', { class: 'w-row' }, link, setDir)), status);
+  };
+  const load = async keep => { const msg = status.textContent; try { draw(await syncCall({ action: 'status' })); if (keep) status.textContent = msg; } catch (e) { sec.textContent = ''; sec.append(h('h2', { class: 'w-h' }, 'Synchro automatique avec Google Drive'), h('p', { class: 'w-note' }, 'Indisponible : ' + e.message)); } };
+  sec.append(h('h2', { class: 'w-h' }, 'Synchro automatique avec Google Drive'), h('p', { class: 'w-note' }, 'Chargement…'));
+  load();
+  return sec;
 }
 async function importCourses(files, skipPrivate, say) {
   const prevAdmin = W.adminMode; W.adminMode = true;

@@ -1,0 +1,282 @@
+// Atelier BUT 1 — fonction « drive-sync »
+// Copie automatiquement le dossier « BUT 1 » de Google Drive dans la bibliothèque de cours commune.
+// - Lecture du Drive par un compte robot Google (secret GDRIVE_SA_JSON = la clé JSON du compte de service).
+//   Le dossier reste privé : Rémi le partage seulement avec l'adresse du robot (lecture).
+// - Seuls les fichiers nouveaux ou modifiés sont copiés ; ce qui disparaît du Drive disparaît du site.
+// - Même tri que l'import manuel : sujets et cours seulement (pas le code, les corrections, les réponses…).
+// - Appelée chaque heure par pg_cron (en-tête x-sync-key) ou par le bouton « Synchroniser maintenant » (admin).
+
+const URL_ = Deno.env.get('SUPABASE_URL')!;
+const pickKey = (legacy: string, dict: string) => {
+  const v = Deno.env.get(legacy); if (v) return v;
+  try { const d = JSON.parse(Deno.env.get(dict) || '{}'); return d.default || Object.values(d)[0] as string || ''; } catch { return ''; }
+};
+const ANON = pickKey('SUPABASE_ANON_KEY', 'SUPABASE_PUBLISHABLE_KEYS');
+const SERVICE = pickKey('SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_SECRET_KEYS');
+
+const cors = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-sync-key',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+};
+const json = (o: unknown, status = 200) => new Response(JSON.stringify(o), { status, headers: { ...cors, 'Content-Type': 'application/json' } });
+const svcHeaders = () => ({ apikey: SERVICE, ...(SERVICE.startsWith('sb_') ? {} : { Authorization: 'Bearer ' + SERVICE }) });
+const svc = (path: string, init: RequestInit = {}) => fetch(URL_ + path, {
+  ...init, headers: { ...svcHeaders(), 'Content-Type': 'application/json', ...(init.headers || {}) },
+});
+async function svcJson(path: string, init: RequestInit = {}) {
+  const r = await svc(path, init); const t = await r.text();
+  if (!r.ok) throw new Error('base : ' + r.status + ' ' + t.slice(0, 200));
+  return t ? JSON.parse(t) : null;
+}
+
+// ---------- mêmes règles que web/shim.js ----------
+const FOLDER = 'application/vnd.google-apps.folder';
+const ROOT_ID = 'but1';
+const TEXT_EXT = /\.(c|cc|cpp|cxx|h|hpp|hh|txt|md|sql|csv|tsv|json|html?|css|js|mjs|py|java|sh|xml|svg|ics|ini|cfg|log)$/i;
+const PRIVATE_NAME = /corrig|correction|r[ée]ponse|solution|rendu|brouillon|perso/i;
+const SHARE_OK = /\.(pdf|docx?|pptx?|xlsx?|odt|odp|ods|rtf|png|jpe?g|gif|webp|svg|sql|csv|tsv)$/i;
+const SITE_DOC_RE = /atelier but ?1|emploi du temps/i;
+const MIMES: Record<string, string> = {
+  pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
+  csv: 'text/csv', tsv: 'text/tab-separated-values', sql: 'text/plain', rtf: 'application/rtf',
+  doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  ppt: 'application/vnd.ms-powerpoint', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  odt: 'application/vnd.oasis.opendocument.text', odp: 'application/vnd.oasis.opendocument.presentation', ods: 'application/vnd.oasis.opendocument.spreadsheet',
+};
+const mimeOf = (name: string) => MIMES[((/\.([^.]+)$/.exec(name) || [, ''])[1] as string).toLowerCase()] || 'application/octet-stream';
+const isPrivate = (name: string, parts: string[]) => !SHARE_OK.test(name) || SITE_DOC_RE.test(name) || PRIVATE_NAME.test(name) || parts.some(p => PRIVATE_NAME.test(p));
+// les fichiers Google (Docs, Slides, Sheets, Dessins) sont convertis
+const EXPORT: Record<string, [string, string]> = {
+  'application/vnd.google-apps.document': ['application/pdf', '.pdf'],
+  'application/vnd.google-apps.presentation': ['application/pdf', '.pdf'],
+  'application/vnd.google-apps.spreadsheet': ['application/pdf', '.pdf'],
+  'application/vnd.google-apps.drawing': ['image/png', '.png'],
+};
+const MAX_BYTES = 45 * 1024 * 1024;
+const enc = new TextEncoder(), dec = new TextDecoder();
+async function sha(s: string) { return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-1', enc.encode(s))), b => b.toString(16).padStart(2, '0')).join('').slice(0, 24); }
+
+// ---------- compte robot Google ----------
+function robot() {
+  const raw = Deno.env.get('GDRIVE_SA_JSON') || '';
+  if (!raw.trim()) return null;
+  try { const j = JSON.parse(raw); if (j.client_email && j.private_key) return j as { client_email: string; private_key: string }; } catch { /* */ }
+  return { client_email: '', private_key: '', bad: true } as any;
+}
+const b64url = (b: Uint8Array | string) => btoa(typeof b === 'string' ? unescape(encodeURIComponent(b)) : String.fromCharCode(...b)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+async function googleToken(sa: { client_email: string; private_key: string }) {
+  const pem = sa.private_key.replace(/-----[^-]+-----/g, '').replace(/\s+/g, '');
+  const der = Uint8Array.from(atob(pem), c => c.charCodeAt(0));
+  const key = await crypto.subtle.importKey('pkcs8', der, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']);
+  const now = Math.floor(Date.now() / 1000);
+  const unsigned = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' })) + '.' + b64url(JSON.stringify({
+    iss: sa.client_email, scope: 'https://www.googleapis.com/auth/drive.readonly', aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 3600,
+  }));
+  const sig = new Uint8Array(await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, enc.encode(unsigned)));
+  const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'grant_type=' + encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer') + '&assertion=' + unsigned + '.' + b64url(sig) });
+  const j = await r.json();
+  if (!r.ok || !j.access_token) throw new Error('Google refuse la clé du robot (' + (j.error_description || j.error || r.status) + ')');
+  return j.access_token as string;
+}
+const G = 'https://www.googleapis.com/drive/v3/files';
+async function gfetch(tok: string, url: string) {
+  const r = await fetch(url, { headers: { Authorization: 'Bearer ' + tok } });
+  if (!r.ok) {
+    const t = await r.text();
+    if (r.status === 404) throw new Error('dossier introuvable : vérifie qu\'il est bien partagé avec le robot');
+    throw new Error('Google Drive : ' + r.status + ' ' + t.slice(0, 160));
+  }
+  return r;
+}
+type GFile = { id: string; name: string; mimeType: string; modifiedTime: string; size?: string; shortcutDetails?: { targetId: string; targetMimeType: string } };
+async function listChildren(tok: string, folder: string): Promise<GFile[]> {
+  const out: GFile[] = []; let page = '';
+  do {
+    const q = encodeURIComponent(`'${folder}' in parents and trashed = false`);
+    const r = await gfetch(tok, `${G}?q=${q}&pageSize=1000&supportsAllDrives=true&includeItemsFromAllDrives=true&fields=nextPageToken,files(id,name,mimeType,modifiedTime,size,shortcutDetails)` + (page ? '&pageToken=' + encodeURIComponent(page) : ''));
+    const j = await r.json(); out.push(...(j.files || [])); page = j.nextPageToken || '';
+  } while (page);
+  return out;
+}
+async function getMeta(tok: string, id: string): Promise<GFile> {
+  return (await gfetch(tok, `${G}/${id}?supportsAllDrives=true&fields=id,name,mimeType,modifiedTime,size`)).json();
+}
+
+// ---------- état (table privée sync_state, une seule ligne id = 1) ----------
+async function state() { return (await svcJson('/rest/v1/sync_state?id=eq.1&select=*'))[0] || null; }
+async function saveState(patch: Record<string, unknown>) {
+  await svcJson('/rest/v1/sync_state?id=eq.1', { method: 'PATCH', body: JSON.stringify(patch), headers: { Prefer: 'return=minimal' } });
+}
+
+// ---------- la synchro ----------
+async function run(budgetMs: number) {
+  const t0 = Date.now();
+  const st = await state();
+  if (!st?.folder_id) throw new Error('aucun dossier Drive choisi');
+  const sa = robot();
+  if (!sa) throw new Error('le robot n\'est pas encore configuré (secret GDRIVE_SA_JSON)');
+  if ((sa as any).bad) throw new Error('le secret GDRIVE_SA_JSON n\'est pas une clé JSON valide');
+  const tok = await googleToken(sa);
+  const root = await getMeta(tok, st.folder_id);
+  if (root.mimeType !== FOLDER) throw new Error('le lien choisi n\'est pas un dossier');
+
+  // ce que le site a déjà
+  const files = new Map<string, any>();
+  for (let from = 0; ; from += 1000) {
+    const part = await svcJson(`/rest/v1/files?owner=is.null&select=id,size,mime,storage_path&order=id&offset=${from}&limit=1000`);
+    for (const r of part) files.set(r.id, r); if (part.length < 1000) break;
+  }
+  const map = new Map<string, any>((await svcJson('/rest/v1/drive_map?select=*')).map((m: any) => [m.file_id, m]));
+
+  const seen = new Set<string>(); const visited = new Set<string>([root.id]);
+  const stats = { added: 0, updated: 0, unchanged: 0, skipped: 0, removed: 0, errors: [] as string[] };
+  let partial = false;
+  const putMap = (rows: any[]) => rows.length ? svcJson('/rest/v1/drive_map', { method: 'POST', body: JSON.stringify(rows), headers: { Prefer: 'resolution=merge-duplicates,return=minimal' } }) : null;
+  const upsertFile = (row: any) => svcJson('/rest/v1/files', { method: 'POST', body: JSON.stringify(row), headers: { Prefer: 'resolution=merge-duplicates,return=minimal' } });
+
+  // parcours en largeur : [id Drive, chemin, id du dossier sur le site]
+  const queue: [string, string[], string][] = [[root.id, [], ROOT_ID]];
+  while (queue.length) {
+    const [gid, path, parent] = queue.shift()!;
+    let kids: GFile[];
+    try { kids = await listChildren(tok, gid); } catch (e) { stats.errors.push((path.join('/') || 'racine') + ' : ' + (e as Error).message); partial = true; continue; }
+    const names = new Set<string>();
+    for (let k of kids) {
+      if (k.mimeType === 'application/vnd.google-apps.shortcut' && k.shortcutDetails) {
+        try { const t = await getMeta(tok, k.shortcutDetails.targetId); k = { ...t, name: k.name }; } catch { stats.skipped++; continue; }
+      }
+      if (/^(\.|__MACOSX|Thumbs\.db|desktop\.ini)/i.test(k.name)) continue;
+      if (k.mimeType === FOLDER) {
+        if (visited.has(k.id)) continue; visited.add(k.id);
+        const segs = [...path, k.name]; const key = segs.join('/');
+        const id = 'c' + await sha('dir:' + key);
+        seen.add(id);
+        if (!files.has(id)) { await upsertFile({ id, owner: null, parent, name: k.name, mime: FOLDER, modified: k.modifiedTime }); files.set(id, { id, mime: FOLDER }); }
+        if (!map.has(id)) await putMap([{ file_id: id, drive_id: k.id, drive_modified: k.modifiedTime, kind: 'folder' }]);
+        queue.push([k.id, segs, id]);
+        continue;
+      }
+      const exp = EXPORT[k.mimeType];
+      if (!exp && k.mimeType.startsWith('application/vnd.google-apps.')) { stats.skipped++; continue; } // formulaires, sites…
+      const name = exp && !k.name.toLowerCase().endsWith(exp[1]) ? k.name + exp[1] : k.name;
+      const parts = [...path, name];
+      if (isPrivate(name, parts)) { stats.skipped++; continue; }
+      if (names.has(name)) { stats.skipped++; continue; } names.add(name); // même nom deux fois dans un dossier
+      const id = 'c' + await sha('file:' + parts.join('/'));
+      seen.add(id);
+      const m = map.get(id), have = files.get(id);
+      if (m && m.drive_modified === k.modifiedTime && have) { stats.unchanged++; continue; }
+      // déjà importé à la main, même taille : on le reconnaît sans le recopier
+      if (!m && have && !exp && k.size != null && String(have.size) === String(k.size)) {
+        await putMap([{ file_id: id, drive_id: k.id, drive_modified: k.modifiedTime, kind: 'file' }]); stats.unchanged++; continue;
+      }
+      if (Date.now() - t0 > budgetMs) { partial = true; continue; } // la suite au prochain passage
+      if (!exp && Number(k.size || 0) > MAX_BYTES) { stats.skipped++; stats.errors.push(name + ' : trop gros (plus de 45 Mo)'); continue; }
+      try {
+        const r = await gfetch(tok, exp ? `${G}/${k.id}/export?mimeType=${encodeURIComponent(exp[0])}` : `${G}/${k.id}?alt=media&supportsAllDrives=true`);
+        const bytes = new Uint8Array(await r.arrayBuffer());
+        const mime = exp ? exp[0] : mimeOf(name);
+        const row: any = { id, owner: null, parent, name, mime, size: bytes.length, modified: k.modifiedTime, content: null, storage_path: null };
+        if (TEXT_EXT.test(name) && bytes.length < 2500000) row.content = dec.decode(bytes);
+        else {
+          row.storage_path = 'cours/' + id;
+          const up = await fetch(URL_ + '/storage/v1/object/cours/' + id, { method: 'POST', headers: { ...svcHeaders(), 'Content-Type': mime, 'x-upsert': 'true' }, body: bytes });
+          if (!up.ok) throw new Error('stockage : ' + up.status + ' ' + (await up.text()).slice(0, 120));
+        }
+        await upsertFile(row);
+        await putMap([{ file_id: id, drive_id: k.id, drive_modified: k.modifiedTime, kind: 'file' }]);
+        if (have) stats.updated++; else stats.added++;
+        files.set(id, row);
+      } catch (e) { stats.errors.push(name + ' : ' + (e as Error).message); partial = true; }
+    }
+  }
+
+  // ce qui a disparu du Drive (seulement après un parcours complet, et jamais tout d'un coup)
+  if (!partial) {
+    const gone = [...map.values()].filter(m => !seen.has(m.file_id));
+    if (gone.length && seen.size === 0) stats.errors.push('le Drive semble vide : rien n\'a été supprimé par prudence');
+    else for (const m of gone.sort((a, b) => (a.kind === 'folder' ? 1 : 0) - (b.kind === 'folder' ? 1 : 0))) {
+      const f = files.get(m.file_id);
+      if (m.kind === 'folder') {
+        const left = await svcJson(`/rest/v1/files?parent=eq.${encodeURIComponent(m.file_id)}&select=id&limit=1`);
+        if (left.length) { await svc('/rest/v1/drive_map?file_id=eq.' + encodeURIComponent(m.file_id), { method: 'DELETE' }); continue; } // il contient des fichiers importés à la main : on le garde
+      }
+      if (f?.storage_path) { const [bucket, ...p] = f.storage_path.split('/'); await fetch(URL_ + '/storage/v1/object/' + bucket, { method: 'DELETE', headers: { ...svcHeaders(), 'Content-Type': 'application/json' }, body: JSON.stringify({ prefixes: [p.join('/')] }) }); }
+      await svc('/rest/v1/files?owner=is.null&id=eq.' + encodeURIComponent(m.file_id), { method: 'DELETE' });
+      await svc('/rest/v1/drive_map?file_id=eq.' + encodeURIComponent(m.file_id), { method: 'DELETE' });
+      stats.removed++;
+    }
+  }
+  const result = { ...stats, partial, folder: root.name, ms: Date.now() - t0 };
+  await saveState({ folder_name: root.name, last_run: new Date().toISOString(), last_result: result, ...(partial ? {} : { last_ok: new Date().toISOString() }) });
+  return result;
+}
+
+Deno.serve(async (req) => {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
+  let body: any = {};
+  try { body = await req.json(); } catch { /* vide */ }
+
+  // qui appelle ? la tâche planifiée (clé) ou l'admin connecté
+  const st = await state().catch(() => null);
+  const key = req.headers.get('x-sync-key') || '';
+  const byCron = !!(key && st?.sync_key && key === st.sync_key);
+  if (!byCron) {
+    const who = await fetch(URL_ + '/auth/v1/user', { headers: { Authorization: req.headers.get('Authorization') || '', apikey: ANON } });
+    if (!who.ok) return json({ error: 'non connecté' }, 401);
+    const me = await who.json();
+    const pr = await svcJson('/rest/v1/profiles?select=is_admin&id=eq.' + me.id).catch(() => []);
+    if (!pr[0]?.is_admin) return json({ error: 'réservé à l\'administrateur' }, 403);
+  }
+  if (!st) return json({ error: 'la table sync_state manque : relance supabase/setup.sql' }, 500);
+  const action = byCron ? 'run' : body.action || 'status';
+
+  if (action === 'status' || action === 'cleanup') {
+    // « orphelins » : cours partagés qui ne viennent pas du Drive (anciens imports à la main absents du Drive)
+    let orphans: any[] = [];
+    if (st.last_ok) {
+      const shared: any[] = await svcJson('/rest/v1/files?owner=is.null&select=id,name,mime,parent,storage_path&limit=5000');
+      const mapped = new Set((await svcJson('/rest/v1/drive_map?select=file_id')).map((m: any) => m.file_id));
+      orphans = shared.filter(f => f.id !== ROOT_ID && !mapped.has(f.id) && f.mime !== FOLDER);
+      if (action === 'cleanup') {
+        for (const f of orphans) {
+          if (f.storage_path) { const [bucket, ...p] = f.storage_path.split('/'); await fetch(URL_ + '/storage/v1/object/' + bucket, { method: 'DELETE', headers: { ...svcHeaders(), 'Content-Type': 'application/json' }, body: JSON.stringify({ prefixes: [p.join('/')] }) }); }
+          await svc('/rest/v1/files?owner=is.null&id=eq.' + encodeURIComponent(f.id), { method: 'DELETE' });
+        }
+        // puis les dossiers vides qui ne viennent pas du Drive
+        let removedDirs = 0;
+        for (let pass = 0; pass < 10; pass++) {
+          const left: any[] = await svcJson('/rest/v1/files?owner=is.null&select=id,parent,mime&limit=5000');
+          const parents = new Set(left.map(f => f.parent));
+          const empty = left.filter(f => f.mime === FOLDER && f.id !== ROOT_ID && !mapped.has(f.id) && !parents.has(f.id));
+          if (!empty.length) break;
+          for (const d of empty) { await svc('/rest/v1/files?owner=is.null&id=eq.' + encodeURIComponent(d.id), { method: 'DELETE' }); removedDirs++; }
+        }
+        return json({ ok: true, removed: orphans.length, removedDirs });
+      }
+    }
+    const sa = robot();
+    return json({ robot: sa && !(sa as any).bad ? sa.client_email : null, robotBad: !!(sa as any)?.bad, folderId: st.folder_id, folderName: st.folder_name,
+      lastRun: st.last_run, lastOk: st.last_ok, last: st.last_result, auto: st.auto, orphans: orphans.length, orphanNames: orphans.slice(0, 8).map(f => f.name) });
+  }
+  if (action === 'folder') {
+    const m = /[-\w]{20,}/.exec(String(body.folder || '').replace(/.*\/folders\//, '').split(/[?#]/)[0]);
+    if (!m) return json({ error: 'colle le lien du dossier Google Drive' }, 400);
+    await saveState({ folder_id: m[0], folder_name: null });
+    return json({ ok: true, folderId: m[0] });
+  }
+  if (action === 'auto') { await saveState({ auto: !!body.on }); return json({ ok: true, auto: !!body.on }); }
+  if (action === 'run') {
+    if (byCron && !st.auto) return json({ ok: true, off: true });
+    try { return json({ ok: true, ...(await run(byCron ? 110000 : 45000)) }); }
+    catch (e) {
+      const msg = (e as Error).message;
+      await saveState({ last_run: new Date().toISOString(), last_result: { error: msg } }).catch(() => {});
+      return json({ error: msg }, 400);
+    }
+  }
+  return json({ error: 'action inconnue' }, 400);
+});
