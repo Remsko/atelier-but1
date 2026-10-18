@@ -2246,7 +2246,7 @@ async function importCourses(files, skipPrivate, say) {
     let added = 0, skipped = 0, i = 0;
     for (const f of items) {
       i++; const name = f.parts[f.parts.length - 1];
-      if (skipPrivate && (!SHARE_OK.test(name) || SITE_DOC_RE.test(name) || PRIVATE_NAME.test(name) || f.parts.some(p => PRIVATE_NAME.test(p)))) { skipped++; continue; }
+      if (skipPrivate && !/contenu des tables/i.test(name) && (!SHARE_OK.test(name) || SITE_DOC_RE.test(name) || PRIVATE_NAME.test(name) || f.parts.some(p => PRIVATE_NAME.test(p)))) { skipped++; continue; }
       say('Import ' + i + '/' + items.length + ' : ' + name);
       const parent = await ensureFolder(f.parts.slice(0, -1));
       const id = 'c' + await sha('file:' + f.parts.join('/'));

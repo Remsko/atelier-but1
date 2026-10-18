@@ -47,7 +47,9 @@ const MIMES: Record<string, string> = {
   odt: 'application/vnd.oasis.opendocument.text', odp: 'application/vnd.oasis.opendocument.presentation', ods: 'application/vnd.oasis.opendocument.spreadsheet',
 };
 const mimeOf = (name: string) => MIMES[((/\.([^.]+)$/.exec(name) || [, ''])[1] as string).toLowerCase()] || (TEXT_EXT.test(name) ? 'text/plain' : 'application/octet-stream');
-const isPrivate = (name: string, parts: string[]) => !SHARE_OK.test(name) || SITE_DOC_RE.test(name) || PRIVATE_NAME.test(name) || parts.some(p => PRIVATE_NAME.test(p));
+// le contenu des tables d'un TD de SQL (copié depuis C5) est une donnée du cours : tout le monde en a besoin pour exécuter ses requêtes
+const TABLES_RE = /contenu des tables/i;
+const isPrivate = (name: string, parts: string[]) => TABLES_RE.test(name) && !parts.slice(0, -1).some(p => PRIVATE_NAME.test(p)) ? false : !SHARE_OK.test(name) || SITE_DOC_RE.test(name) || PRIVATE_NAME.test(name) || parts.some(p => PRIVATE_NAME.test(p));
 // les fichiers Google (Docs, Slides, Sheets, Dessins) sont convertis
 const EXPORT: Record<string, [string, string]> = {
   'application/vnd.google-apps.document': ['application/pdf', '.pdf'],
