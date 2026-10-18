@@ -100,3 +100,16 @@ html.w-out .app { visibility: hidden; }
 .w-pclose { margin: 14px auto 0; display: block; }
 .w-lcard > .w-go { width: 100%; justify-content: center; margin-top: 14px; }
 @media (max-width: 999px) { .w-promo { display: none; } }
+
+/* Administration → Consommation */
+.w-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin: 12px 0; }
+.w-kpis > div { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; background: var(--paper); display: grid; gap: 2px; }
+.w-kpis span { font-size: 12px; color: var(--muted); }
+.w-kpis b { font-size: 22px; font-variant-numeric: tabular-nums; }
+.w-kpis small { font-size: 12px; color: var(--muted); }
+.w-scroll { overflow-x: auto; }
+.w-conso td { vertical-align: top; font-variant-numeric: tabular-nums; }
+.w-conso-tot td { border-top: 2px solid var(--line); }
+.w-conso-det > td { background: var(--paper); padding: 4px 8px 10px; }
+.w-conso-det .w-table td { font-size: 13px; padding: 3px 8px; }
+@media (max-width: 640px) { .w-conso th:nth-child(4), .w-conso td:nth-child(4), .w-conso-det td:nth-child(4) { display: table-cell; } }

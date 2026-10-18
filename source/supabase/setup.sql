@@ -163,3 +163,32 @@ language sql security definer set search_path = public as $$
   returning expert
 $$;
 revoke execute on function public.ia_take_expert(uuid) from public, anon, authenticated;
+
+-- ---------- assistant IA : consommation réelle (tokens et coût) par personne, jour et modèle ----------
+-- remplie par la fonction « ia » après chaque demande ; lisible par la personne elle-même et par l'admin (Administration → Consommation)
+create table if not exists public.ia_cost (
+  owner         uuid not null references auth.users on delete cascade,
+  day           date not null default current_date,
+  model         text not null,
+  requests      int not null default 0,
+  input_tokens  bigint not null default 0,
+  output_tokens bigint not null default 0,
+  cache_read    bigint not null default 0,
+  cache_write   bigint not null default 0,
+  cost_usd      numeric(12,6) not null default 0,
+  primary key (owner, day, model)
+);
+alter table public.ia_cost enable row level security;
+drop policy if exists "ia_cost: moi ou admin" on public.ia_cost;
+create policy "ia_cost: moi ou admin" on public.ia_cost for select to authenticated using (owner = auth.uid() or public.is_admin());
+grant select on public.ia_cost to authenticated;
+revoke all on public.ia_cost from anon;
+create or replace function public.ia_record(p_owner uuid, p_model text, p_in bigint, p_out bigint, p_cache_read bigint, p_cache_write bigint, p_cost numeric)
+returns void language sql security definer set search_path = public as $$
+  insert into public.ia_cost (owner, day, model, requests, input_tokens, output_tokens, cache_read, cache_write, cost_usd)
+  values (p_owner, (now() at time zone 'Europe/Paris')::date, p_model, 1, p_in, p_out, p_cache_read, p_cache_write, p_cost)
+  on conflict (owner, day, model) do update set
+    requests = ia_cost.requests + 1, input_tokens = ia_cost.input_tokens + excluded.input_tokens, output_tokens = ia_cost.output_tokens + excluded.output_tokens,
+    cache_read = ia_cost.cache_read + excluded.cache_read, cache_write = ia_cost.cache_write + excluded.cache_write, cost_usd = ia_cost.cost_usd + excluded.cost_usd
+$$;
+revoke execute on function public.ia_record(uuid, text, bigint, bigint, bigint, bigint, numeric) from public, anon, authenticated;
