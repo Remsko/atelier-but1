@@ -564,6 +564,9 @@ main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .sql-out:empty { display: none; }
 .sql-out { margin-top: 8px; }
 .sql-res td.null { color: var(--muted); font-style: italic; }
+.c5-full { margin: 4px 0 8px; }
+.c5-full > summary { cursor: pointer; font-size: 13px; color: var(--muted, inherit); padding: 4px 0; }
+.c5-full[open] > summary { margin-bottom: 2px; }
 .proof-pre { font-family: var(--f-mono); font-size: 12px; line-height: 1.45; background: var(--code-bg); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; overflow-x: auto; white-space: pre; margin: 6px 0; }
 .dbpanel h3 .num { color: var(--ok); }
 .alg-tree { margin: 10px 0 14px; padding: 12px; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; overflow-x: auto; color: var(--ink); }
@@ -7497,12 +7500,9 @@ function showTd(f, focusIdx) {
     function paintProof() {
       proofOut.textContent = '';
       if (!st.proof[k]) return;
-      const copy = el('button', { class: 'btn sm', type: 'button' }, 'Copier');
-      copy.addEventListener('click', async () => { try { await navigator.clipboard.writeText(st.proof[k]); toast('Réponse copiée'); } catch (e) { toast('Copie impossible ici'); } });
       const del = el('button', { class: 'btn sm', type: 'button' }, 'Effacer');
       del.addEventListener('click', () => { delete st.proof[k]; st.dirty = true; save(); paintProof(); updMeta(); });
-      proofOut.append(el('div', { class: 'who', text: 'Réponse rédigée (format C5)' }), el('pre', { class: 'proof-pre', text: st.proof[k] }),
-        el('div', { class: 'td-bar' }, copy, del, el('span', { class: 'muted small', text: 'Résultats calculés ici à partir des tables du cours : vérifie-les sur C5 avant de rendre.' })));
+      proofOut.append(...c5View(st.proof[k], 'Réponse rédigée (format C5)', 'Réponse copiée', [del, el('span', { class: 'muted small', text: 'Résultats calculés ici à partir des tables du cours : vérifie-les sur C5 avant de rendre.' })]));
     }
     async function writeProof(btn) {
       const smp = await getSample(); if (!smp) { proofOut.innerHTML = '<p class="err">La rédaction a besoin de l\'IA, qui n\'est pas activé sur ce site.</p>'; return; }
@@ -7516,6 +7516,57 @@ function showTd(f, focusIdx) {
       btn.disabled = false;
     }
     // réponse au format C5 (requête + résultat + explications + preuve annotée) pour une requête donnée
+    // version allégée d'une réponse C5 : sans les paragraphes d'explication, preuve annotée seulement sur les lignes sélectionnées et les colonnes projetées (la version complète reste dépliable)
+    function c5Light(txt) {
+      const SECT = /^(PROJECTION|JOINTURE|S[ÉE]LECTION|TRI|OP[ÉE]RATION ENSEMBLISTE|FONCTION DE GROUPE|REGROUPEMENT)\s*:\s*$/i;
+      const KEEP = /^(projection|tri\b)/i;
+      const STOP = /\s{2,}| (?=(?:projection|tri \d|tri :|jointure|crit[èe]re|s[ée]lection|groupe|regroupement|fonction)\b)/i;
+      const L = String(txt || '').split('\n'), out = [];
+      let i = 0;
+      const isSep = s => /^\+(?:-+\+)+$/.test(s.trim());
+      while (i < L.length) {
+        const ln = L[i];
+        if (SECT.test(ln.trim())) { i++; while (i < L.length && L[i].trim()) i++; while (i < L.length && !L[i].trim()) i++; continue; }
+        if (isSep(ln) && i + 2 < L.length && L[i + 1].trim().startsWith('|') && isSep(L[i + 2])) {
+          // tableau : bordure, en-tête, bordure, lignes…, bordure
+          let j = i + 3; while (j < L.length && L[j].trim().startsWith('|')) j++;
+          const rows = L.slice(i + 3, j);
+          const notes = rows.map(r => { const p = r.indexOf(' <<<<< '); return p < 0 ? '' : r.slice(p + 7); });
+          const sel = notes.some(n => /S[ÉE]LECTIONN|GARD[ÉE]|RETENU/i.test(n));
+          out.push(L[i], L[i + 1], L[i + 2]);
+          rows.forEach((r, x) => { const p = r.indexOf(' <<<<< '); out.push(p < 0 || !sel || /S[ÉE]LECTIONN|GARD[ÉE]|RETENU/i.test(notes[x]) ? r : r.slice(0, p)); });
+          if (j < L.length && isSep(L[j])) { out.push(L[j]); j++; }
+          // repères de colonnes (^^^ + étiquettes) : on garde projection et tri
+          if (j < L.length && /^\s*\^/.test(L[j])) {
+            const segs = []; const re = /\^+/g; let m;
+            while ((m = re.exec(L[j]))) segs.push({ at: m.index, w: m[0].length });
+            let k = j + 1; const labs = [];
+            while (k < L.length && L[k].trim() && !/^\d+ rows? in set|^Empty set/.test(L[k].trim())) labs.push(L[k++]);
+            const grab = (s, at) => { const t = s.slice(at); if (!t || t[0] === ' ' || (at > 0 && s[at - 1] !== ' ')) return ''; const p = t.search(STOP); return (p < 0 ? t : t.slice(0, p)).trim(); };
+            const kept = segs.filter(sg => labs.length && KEEP.test(grab(labs[0], sg.at)));
+            if (kept.length) {
+              let s = ''; for (const sg of kept) s = s.padEnd(sg.at) + '^'.repeat(sg.w); out.push(s);
+              for (const lb of labs) { let t = ''; for (const sg of kept) { const g = grab(lb, sg.at); if (g && KEEP.test(g)) t = t.padEnd(t.length > sg.at ? t.length + 1 : sg.at) + g; } if (t.trim()) out.push(t); }
+            }
+            j = k;
+          }
+          if (j < L.length && /^\d+ rows? in set|^Empty set/.test(L[j].trim())) { const p = L[j].indexOf('  <<<<< '); out.push(p < 0 ? L[j] : L[j].slice(0, p)); j++; }
+          i = j; continue;
+        }
+        out.push(ln); i++;
+      }
+      return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    }
+    function c5View(full, label, okMsg, extra) {
+      const light = c5Light(full);
+      const cp = (t, m) => async () => { try { await navigator.clipboard.writeText(t); toast(m); } catch (x) { toast('Copie impossible ici'); } };
+      const copy = el('button', { class: 'btn sm', type: 'button' }, 'Copier');
+      copy.addEventListener('click', cp(light, okMsg));
+      const copyFull = el('button', { class: 'btn sm', type: 'button' }, 'Copier la version complète');
+      copyFull.addEventListener('click', cp(full, okMsg + ' (version complète)'));
+      const det = el('details', { class: 'c5-full' }, el('summary', { text: 'Voir la version complète (avec les explications)' }), el('pre', { class: 'proof-pre', text: full }), el('div', { class: 'td-bar' }, copyFull));
+      return [el('div', { class: 'who', text: label }), el('pre', { class: 'proof-pre', text: light }), el('div', { class: 'td-bar' }, copy, ...(extra || [])), det];
+    }
     async function c5Text(smp, query, main, step) {
       {
         const env = await getEnv();
@@ -7569,10 +7620,7 @@ function showTd(f, focusIdx) {
       const show = () => {
         out.textContent = '';
         if (!st.solc5[k]) return;
-        const copy = el('button', { class: 'btn sm', type: 'button' }, 'Copier');
-        copy.addEventListener('click', async () => { try { await navigator.clipboard.writeText(st.solc5[k]); toast('Correction C5 copiée'); } catch (x) { toast('Copie impossible ici'); } });
-        out.append(el('div', { class: 'who', text: 'Correction au format C5' }), el('pre', { class: 'proof-pre', text: st.solc5[k] }),
-          el('div', { class: 'td-bar' }, copy, el('span', { class: 'muted small', text: 'Résultats calculés sur les tables du TD : vérifie-les sur C5.' })));
+        out.append(...c5View(st.solc5[k], 'Correction au format C5', 'Correction C5 copiée', [el('span', { class: 'muted small', text: 'Résultats calculés sur les tables du TD : vérifie-les sur C5.' })]));
       };
       const b = el('button', { class: 'btn sm', type: 'button', title: 'La requête de la correction, avec son résultat et la preuve annotée, au format du fichier à rendre' }, st.solc5[k] ? 'Refaire au format C5' : 'Correction au format C5');
       b.addEventListener('click', async () => {
