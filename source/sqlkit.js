@@ -191,6 +191,8 @@ var SQLKIT = (function () {
       const st = normalize(st0, env.info);
       const unk = /^\s*(select|with)\b/i.test(st) ? unknownName(st, env.info) : null;
       if (unk) { results.push({ sql: st0, error: unk }); continue; }
+      const many = /^\s*(select|with)\b/i.test(st) ? scalarTooMany(env, st) : null;
+      if (many) { results.push({ sql: st0, error: many }); continue; }
       try {
         const setop = splitSetOps(st);
         if (setop) { results.push(Object.assign({ sql: st0, dec: decimalCols(setop.parts[0]) }, runSetOps(env, setop))); continue; }
@@ -203,6 +205,23 @@ var SQLKIT = (function () {
       } catch (e) { results.push({ sql: st0, error: frErr(e.message, env.info) }); }
     }
     return { results, info: env.info, errors: env.errors };
+  }
+  /* comparaison avec une sous-requête (sans ANY, ALL, IN ni EXISTS) qui renvoie plusieurs lignes : MySQL refuse la requête (ERROR 1242) */
+  function scalarTooMany(env, st) {
+    const plain = st.replace(/'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"/g, m => 'x'.repeat(m.length));
+    const re = /(<>|!=|<=|>=|=|<|>)\s*\(\s*select\b/gi; let m;
+    while ((m = re.exec(plain))) {
+      const open = plain.indexOf('(', m.index + m[1].length);
+      let depth = 0, end = -1;
+      for (let i = open; i < plain.length; i++) { if (plain[i] === '(') depth++; else if (plain[i] === ')' && !--depth) { end = i; break; } }
+      if (end < 0) continue;
+      const sub = st.slice(open + 1, end);
+      try {
+        let r = env.db.exec(normalize(sub, env.info));
+        if (Array.isArray(r) && r.length > 1) return 'ERROR 1242 (21000): Subquery returns more than 1 row. La sous-requête « ' + sub.trim().replace(/\s+/g, ' ') + ' » renvoie ' + r.length + ' lignes : on ne peut pas comparer avec ' + m[1] + ' à plusieurs valeurs. Utilise ANY, ALL ou IN, ou fais en sorte qu\'elle ne renvoie qu\'une ligne.';
+      } catch (e) { /* sous-requête corrélée : on ne peut pas la vérifier seule */ }
+    }
+    return null;
   }
   /* UNION / INTERSECT / EXCEPT au premier niveau, avec un ORDER BY final éventuel */
   function splitSetOps(st) {
