@@ -4796,9 +4796,12 @@ var SQLKIT = (function () {
     const env = build(alasql, base);
     const results = [];
     for (const st0 of statements(sql)) {
-      const st = normalize(st0, env.info);
+      let st = normalize(st0, env.info);
       const unk = /^\s*(select|with)\b/i.test(st) ? unknownName(st, env.info) : null;
       if (unk) { results.push({ sql: st0, error: unk }); continue; }
+      let rowErr = null;
+      if (/^\s*(select|with)\b/i.test(st)) { try { st = rowValueIn(env, st); } catch (e) { rowErr = e.message; } }
+      if (rowErr) { results.push({ sql: st0, error: rowErr }); continue; }
       const many = /^\s*(select|with)\b/i.test(st) ? scalarTooMany(env, st) : null;
       if (many) { results.push({ sql: st0, error: many }); continue; }
       try {
@@ -4808,11 +4811,41 @@ var SQLKIT = (function () {
         if (Array.isArray(res) && res.length && Array.isArray(res[0])) res = res[res.length - 1];
         if (Array.isArray(res)) {
           const cols = res.length ? Object.keys(res[0]) : (/^\s*select/i.test(st) ? selectHeads(st) : []);
-          results.push({ sql: st0, cols, rows: res.map(o => cols.map(c => o[c] === undefined ? null : o[c])), dec: decimalCols(st0) });
+          results.push({ sql: st0, cols, rows: res.map(o => cols.map(c => o[c] === undefined || (typeof o[c] === 'number' && Number.isNaN(o[c])) ? null : o[c])), dec: decimalCols(st0) });
         } else results.push({ sql: st0, info: typeof res === 'number' ? res + ' ligne(s) modifiée(s) (seulement dans cette exécution)' : 'OK' });
       } catch (e) { results.push({ sql: st0, error: frErr(e.message, env.info) }); }
     }
     return { results, info: env.info, errors: env.errors };
+  }
+  /* (col1, col2) [NOT] IN (SELECT a, b …) : alasql ne connaît pas les couples ; on calcule la sous-requête
+     puis on la remplace par les couples obtenus, avec la logique de MySQL pour NULL */
+  function rowValueIn(env, st) {
+    for (let guard = 0; guard < 20; guard++) {
+      const plain = st.replace(/'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"/g, m => 'x'.repeat(m.length));
+      const m = /\(\s*([\w.`]+(?:\s*,\s*[\w.`]+)+)\s*\)\s*(not\s+)?in\s*\(\s*select\b/i.exec(plain);
+      if (!m) return st;
+      const cols = st.slice(m.index, m.index + m[0].length).replace(/^\(\s*/, '').split(/\)\s*(?:not\s+)?in/i)[0].split(',').map(c => c.trim());
+      const open = m.index + m[0].search(/\(\s*select\b/i);
+      let depth = 0, end = -1;
+      for (let i = open; i < plain.length; i++) { if (plain[i] === '(') depth++; else if (plain[i] === ')' && !--depth) { end = i; break; } }
+      if (end < 0) return st;
+      const sub = st.slice(open + 1, end);
+      let rows;
+      try { rows = env.db.exec(normalize(sub, env.info)); } catch (e) { throw new Error('La sous-requête « ' + sub.trim().replace(/\s+/g, ' ') + ' » ne s\'exécute pas : ' + e.message); }
+      if (!Array.isArray(rows)) return st;
+      const vals = rows.map(o => Object.keys(o).map(k => o[k]));
+      if (vals.some(v => v.length !== cols.length)) throw new Error('ERROR 1241 (21000): Operand should contain ' + cols.length + ' column(s). La sous-requête doit renvoyer autant de colonnes que le couple (' + cols.join(', ') + ').');
+      const lit = v => typeof v === 'number' ? String(v) : typeof v === 'boolean' ? (v ? '1' : '0') : "'" + String(v).replace(/'/g, "''") + "'";
+      const isNull = v => v === null || v === undefined;
+      // logique à trois valeurs de MySQL : vrai si un couple correspond exactement, NULL si un couple n'est pas forcément différent (NULL d'un côté), faux sinon
+      const full = vals.filter(v => !v.some(isNull)).map(v => '(' + cols.map((c, j) => c + ' = ' + lit(v[j])).join(' AND ') + ')');
+      const diff = v => { const d = cols.map((c, j) => isNull(v[j]) ? null : '(' + c + ' IS NOT NULL AND ' + c + ' <> ' + lit(v[j]) + ')').filter(Boolean); return d.length ? '(' + d.join(' OR ') + ')' : '(1 = 0)'; };
+      const isIn = full.length ? '(' + full.join(' OR ') + ')' : '(1 = 0)';
+      const allDiff = vals.length ? '(' + vals.map(diff).join(' AND ') + ')' : '(1 = 1)';
+      const expr = '(CASE WHEN ' + isIn + ' THEN ' + (m[2] ? '0' : '1') + ' WHEN ' + allDiff + ' THEN ' + (m[2] ? '1' : '0') + ' ELSE NULL END = 1)';
+      st = st.slice(0, m.index) + expr + st.slice(end + 1);
+    }
+    return st;
   }
   /* comparaison avec une sous-requête (sans ANY, ALL, IN ni EXISTS) qui renvoie plusieurs lignes : MySQL refuse la requête (ERROR 1242) */
   function scalarTooMany(env, st) {
